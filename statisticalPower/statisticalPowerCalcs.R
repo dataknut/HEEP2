@@ -1,0 +1,411 @@
+# Statistical power calculations
+
+# Packages ----
+library(data.table) # for data munching
+library(ggplot2) # for plots
+library(lubridate) # for dateTimes
+library(hms) # hms
+library(GREENGridData) # for useful functions
+library(kableExtra) # tables
+
+# Functions ----
+source(here::here("R", "functions.R"))
+
+# Data ----
+# Sourced from https://reshare.ukdataservice.ac.uk/853334/
+dataPath <- "~/temp/"
+# half-hourly total household consumption (pre-prepared)
+totalF <- paste0(dataPath, "halfHourImputedTotalDemand_Fixed.csv.gz")
+# half-hourly lighting consumption
+lightingF <- paste0(dataPath, "halfHourLighting.csv.gz")
+#
+# household attribute data
+hhF <- paste0(dataPath, "ggHouseholdAttributesSafe_2019-04-09.csv")
+
+# household attribute data
+hhF <- paste0(dataPath, "ggHouseholdAttributesSafe_2019-04-09.csv")
+
+# Data prep ---
+# > power ----
+totalDT <- data.table::fread(totalF)
+setkey(totalDT, linkID)
+uniqueN(totalDT$linkID)
+lightingDT <- data.table::fread(lightingF)
+uniqueN(lightingDT$linkID)
+setkey(lightingDT, linkID)
+
+powerDataPrep <- function(dt){
+  dt[, meanConsumptionkWh := (meanPowerW/2)/1000]
+  dt[, r_as_dateTime := lubridate::as_datetime(r_dateTimeHalfHour)]
+  dt[, r_dateTimeNZ := lubridate::with_tz(r_as_dateTime, "Pacific/Auckland")]
+  dt[, r_date := lubridate::as_date(r_dateTimeNZ)]
+  dt[, r_halfHour := hms::as_hms(r_dateTimeNZ)]
+  dt <- addNZSeason(dt, dateTime = "r_dateTimeNZ")
+  return(dt)
+}
+
+totalDT <- powerDataPrep(totalDT)
+lightingDT <- powerDataPrep(lightingDT)
+
+# check - beware which hemisphere we are in?
+table(totalDT$month, totalDT$season)
+
+testDT <- totalDT[, .(meankWh = mean(meanConsumptionkWh)), 
+                  keyby = .(r_halfHour, season)]
+ggplot2::ggplot(testDT, aes(x = r_halfHour, y = meankWh, colour = season)) + 
+  geom_line() +
+  labs(caption = "Whole household kWh")
+
+
+testDT <- lightingDT[, .(meankWh = mean(meanConsumptionkWh)), 
+                  keyby = .(r_halfHour, season)]
+ggplot2::ggplot(testDT, aes(x = r_halfHour, y = meankWh, colour = season)) + 
+  geom_line() +
+  labs(caption = "Lighting kWh where known")
+# looks OK
+message("# half-hour: whole household kWh")
+summary(totalDT)
+
+# > household ----
+hhDT <- data.table::fread(hhF)
+hhDT <- code_Q7(hhDT)
+hhDT[, hasPV := `PV Inverter`]
+hhDT[, hasPV := ifelse(hasPV == "", "No", hasPV)]
+
+# check
+uniqueN(hhDT$linkID)
+uniqueN(totalDT$linkID)
+
+setkey(hhDT, linkID)
+setkey(totalDT, linkID)
+
+#> data checks ----
+
+# any zeros & negative numbers?
+hist(totalDT$meanConsumptionkWh)
+# some
+
+# check if aggregated to daily sum
+dailyAllDT <- totalDT[, .(sumkWh = sum(meanConsumptionkWh)), keyby = .(r_date, linkID)]
+hist(dailyAllDT$sumkWh)
+# still some neg - probably due to PV?
+
+# check if aggregated to daily mean
+dt <- dailyAllDT[, .(meankWh = mean(sumkWh),
+                     sdkWh = sd(sumkWh)), keyby = .(linkID)]
+hist(dt$meankWh)
+# still some
+
+# need to check -ve = mid-day, if not is not PV must just be errors?
+totalDT[, testValues := "> 0"]
+totalDT[, testValues := ifelse(meanConsumptionkWh == 0, "0", testValues)]
+totalDT[, testValues := ifelse(meanConsumptionkWh < 0, "< 0", testValues)]
+testDT <- totalDT[hhDT[, .(linkID, hasPV)]]
+dt <- totalDT[testValues == "< 0", .(nValues = .N),
+                  keyby = .(r_halfHour, season, linkID, testValues,hasPV)]
+
+p <- ggplot2::ggplot(dt[!is.na(testValues) & !is.na(season)], aes(x = r_halfHour, y = nValues, colour = linkID)) +
+  geom_line() +
+  facet_grid(season ~ testValues + hasPV) +
+  labs(x = "Half hour",
+       y = "N",
+       caption = "Colours = individual dwellings, legend omitted for clarity"
+  ) +
+  theme(legend.position="none")
+p
+
+library(plotly)
+plotly::ggplotly(p)
+# so:
+# a) neg values indicate PV
+# b) at least 1 dwelling had PV but didn't say so in survey - rf_06
+hhDT[, hasPVfixed := ifelse(linkID == "rf_06", "yes", hasPV)]
+hhDT[, .(n = .N), keyby = .(hasPV, hasPVfixed)]
+
+# If we only care about network load we could keep all values > 0 only
+# If we want total energy input then we need grid draw + PV input which we might be able
+# to calculate from the PV circuit W - grid export
+# but it gets complicated.
+# So for now we'll leave out the dwellinmgs which seem to have PV
+setkey(dailyAllDT, linkID)
+dailyDT <- dailyAllDT[hhDT[hasPVfixed == "No"]]
+
+dailyMeanDT <- dailyDT[!is.na(sumkWh), .(meankWh = mean(sumkWh, na.rm = TRUE),
+                           sdkWh = sd(sumkWh, na.rm = TRUE)), keyby = .(linkID)]
+setkey(dailyMeanDT, linkID)
+#> final data ----
+dailyMeanLinkedDT <- dailyMeanDT[hhDT]
+dailyMeanLinkedDT <- dailyMeanLinkedDT[!is.na(meankWh)]
+
+# Analysis ----
+
+make_p95Table <- function(dt,groupVar, kWh = "meankWh"){
+  # aggregates kWh
+  # remember that kWh could be defined in a range of ways (daily sum, mean etc)
+  t95 <- dt[!is.na(Q7labAgg), .(meankWh = mean(get(kWh)),
+                                           minkWh = min(get(kWh)),
+                                           maxkWh = max(get(kWh)),
+                                           sdkWh = sd(get(kWh)),
+                                           nHouseholds = uniqueN(linkID)),
+                       keyby = .(category = get(groupVar))]
+  setnames(t95, c("category"), groupVar)
+  t90 <- copy(t95) # has to be a copy
+  
+  t95[, Threshold := "p < 0.05 (observed n)"]
+  t95[, se := sdkWh/sqrt(nHouseholds)]
+  t95[, error := qnorm(0.975)*se]
+  t95[, CI_lower := meankWh - error]
+  t95[, CI_upper := meankWh + error]
+  
+  t90[, Threshold := "p < 0.1 (observed n)"]
+  t90[, se := sdkWh/sqrt(nHouseholds)]
+  t90[, error := qnorm(0.95)*se]
+  t90[, CI_lower := meankWh - error]
+  t90[, CI_upper := meankWh + error]
+  
+  return(rbind(t90, t95))
+}
+
+make_CIplot <- function(t, kwh = "meankWh", xVar, xLab){
+  # plots whatever kWh is by xVar
+  p <- ggplot2::ggplot(obsT, aes(x = get(xVar), y = kWh, fill = Threshold)) +
+    geom_col() + 
+    geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
+    facet_wrap(Threshold ~  .) +
+    labs(x = xLab,
+         y = "Mean daily kWh"
+    ) +
+    theme(legend.position="bottom")
+  ggplot2::ggsave(paste0(xVar,"_CI.png"), p, 
+                  width = 6, path = here::here("plots"))
+  return(p)
+}
+
+# > Dwelling age ----
+obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(Q7labAgg) & !is.na(meankWh)], 
+                      groupVar = "Q7labAgg")
+
+obsT[, kWh := meankWh]
+make_CIplot(obsT, xVar = "Q7labAgg", xLab = "Dwelling age")
+
+kableExtra::kable(obsT, digits = 3) %>%
+  kable_styling()
+
+# >> Power: Observations ----
+# What 'effect size' do we observe?
+m1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", meankWh]
+m2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", meankWh]
+
+# common sd??
+r <- lm(meankWh ~ Q7labAgg, data = dailyMeanLinkedDT)
+results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
+sigma <- results$sigma # rse
+
+diff <- abs(m1-m2)
+# Difference
+diff
+d <- diff/sigma
+
+n1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", nHouseholds]
+n2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", nHouseholds]
+
+# what effect size would we need for the GG n? p = 0.05
+pwr95 <- pwr::pwr.t2n.test(n1 = n1,
+                  n2 = n2,
+                  d = , sig.level = 0.05, power = 0.8)
+pwr95$d
+# which means a kWh difference of
+pwr95$d * sigma
+  
+# what effect size would we need for the GG n? p = 0.1
+pwr90 <- pwr::pwr.t2n.test(n1 = n1,
+                  n2 = n2,
+                  d = , sig.level = 0.1, power = 0.8)
+pwr90
+# which means a kWh difference of
+pwr90$d * sigma
+
+# what effect size could we get with HEEPfull? p = 0.05
+pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1*10,
+                  n2 = n2*10,
+                  d = , sig.level = 0.05, power = 0.8)
+pwr95_HEEP2full
+#HEEP2full
+# which means a kWh difference of
+pwr95_HEEP2full$d * sigma
+
+# what effect size could we get with HEEP2pool? p = 0.05
+# HEEP2pool obtained - see table
+n1*80 + n2*80
+pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1*80,
+                  n2 = n2*80,
+                  d = , sig.level = 0.05, power = 0.8)
+pwr95_HEEP2poolOb
+# which means a kWh difference of
+# HEEP2pool
+pwr95_HEEP2poolOb$d * sigma
+
+# report table
+kableExtra::kable(obsT, digits = 2) %>%
+  kable_styling()
+
+
+#> Heat pumps ----
+
+# GG
+t <- table(hhDT$`Heat pump number`, useNA = "always")
+t
+prop.table(t)
+
+# with elec data
+dailyMeanLinkedDT[, heatPumps := `Heat pump number`]
+dailyMeanLinkedDT[, heatPumps := ifelse(is.na(`Heat pump number`), 0, heatPumps)]
+dailyMeanLinkedDT[, .(nHHs = uniqueN(linkID)), keyby = .(heatPumps)]
+
+obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(heatPumps)], "heatPumps")
+obsT[, kWh := meankWh]
+make_CIplot(obsT, kwh = "meankWh", xVar = "heatPumps", xLab = "N heat pumps")
+
+kableExtra::kable(obsT, digits = 3) %>%
+  kable_styling()
+
+# switch to binary for HPs - yes or no
+dailyMeanLinkedDT[, hasHeatPump := "No"]
+dailyMeanLinkedDT[, hasHeatPump := ifelse(heatPumps > 0, "Yes", hasHeatPump)]
+obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(hasHeatPump)], "hasHeatPump")
+
+# report table
+kableExtra::kable(obsT, digits = 2) %>%
+  kable_styling()
+
+# >> Power: Observations ----
+# What 'effect size' do we observe?
+m1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", meankWh]
+m2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", meankWh]
+
+# common sd??
+r <- lm(meankWh ~ hasHeatPump, data = dailyMeanLinkedDT)
+results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
+sigma <- results$sigma # rse
+
+diff <- abs(m1-m2)
+# Difference
+diff
+d <- diff/sigma
+
+n1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", nHouseholds]
+n2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", nHouseholds]
+
+# what effect size would we need for the GG n? p = 0.05
+pwr95 <- pwr::pwr.t2n.test(n1 = n1,
+                           n2 = n2,
+                           d = , sig.level = 0.05, power = 0.8)
+pwr95
+pwr95$d
+# which means a kWh difference of
+pwr95$d * sigma
+
+# what effect size would we need for the GG n? p = 0.1
+pwr90 <- pwr::pwr.t2n.test(n1 = n1,
+                           n2 = n2,
+                           d = , sig.level = 0.1, power = 0.8)
+pwr90
+# which means a kWh difference of
+pwr90$d * sigma
+
+# what effect size could we get with HEEP2full? p = 0.05
+# Use HCS proportions
+# HCS: 45% owned, 27% renters, overall = 38% (Vicki White and Mark Jones 2017)
+HEEP2full <- 360 
+n1 <- HEEP2full - (HEEP2full*0.38)
+n2 <- HEEP2full*0.38
+pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
+                                     n2 = n2,
+                                     d = , sig.level = 0.05, power = 0.8)
+pwr95_HEEP2full
+#HEEP2full
+# which means a kWh difference of
+pwr95_HEEP2full$d * sigma
+
+# what effect size could we get with HEEP2full? p = 0.1
+pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
+                                     n2 = n2,
+                                     d = , sig.level = 0.1, power = 0.8)
+pwr95_HEEP2full
+#HEEP2full
+# which means a kWh difference of
+pwr95_HEEP2full$d * sigma
+
+getDrange <- function(nList,p){
+  dt <- data.table::data.table()
+  for(n in nList){
+    n2 <- n * p # p = the proportion that have X
+    n1 <- n - n2
+    pres <- pwr::pwr.t2n.test(n1 = n1,
+                             n2 = n2,
+                             d = , sig.level = 0.1, power = 0.8)
+    res <- as.data.table(c(n1,n2,n, pres$d))
+    dt <- rbind(dt,transpose(res))
+  }
+  return(dt)
+}
+
+nList <- seq(100,1000,50)
+p <- 0.38
+resDT <- getDrange(nList, p)
+resDT[, kWhDiff := V4 * sigma]
+pl <- ggplot2::ggplot(resDT, aes(x = V3, y = kWhDiff)) + 
+  geom_line() +
+  geom_point() +
+  labs(x = "Total sample size",
+       y = "kWh difference",
+       caption = paste0("p = 0.05, power = 0.8\n",
+                        "% with heat pump = ",100*p))
+pl
+ggplot2::ggsave("kWhDiff_rangeHeatPumps.png", pl, 
+                width = 6, path = here::here("plots"))
+
+# what effect size could we get with HEEP2poolObtained? p = 0.05
+# HEEP2pool obtained - see table
+HEEP2pool <- 2880 
+n1 <- HEEP2pool - (HEEP2pool*0.38)
+n2 <- HEEP2pool*0.38
+pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
+                                       n2 = n2,
+                                       d = , sig.level = 0.05, power = 0.8)
+pwr95_HEEP2poolOb
+# which means a kWh difference of
+# HEEP2pool
+pwr95_HEEP2poolOb$d * sigma
+
+
+# > Lighting ----
+# GG
+t <- table(hhDT$Q49_coded, useNA = "always")
+t
+prop.table(t)
+
+# need to use lighting extract
+
+dailyLightingDT <- lightingDT[, .(sumkWh = sum(meanConsumptionkWh)), 
+                              keyby = .(r_date, linkID)]
+dailyMeanLightingDT <- dailyLightingDT[, .(meankWh = mean(sumkWh),
+                                           sdkWh = sd(sumkWh)),
+                                       keyby = .(linkID)]
+setkey(dailyMeanLightingDT, linkID)
+dailyMeanLightingLinkedDT <- dailyMeanLightingDT[hhDT]
+
+dailyMeanLightingLinkedDT[, .(nHHs = uniqueN(linkID)), keyby = .(Q49_coded)]
+dailyMeanLightingLinkedDT <- dailyMeanLightingLinkedDT[Q49_coded != "" & 
+                                                         !is.na(meankWh)]
+
+obsT <- make_p95Table(dailyMeanLightingLinkedDT[!is.na(Q49_coded)], groupVar = "Q49_coded")
+
+obsT[, kWh := meankWh]
+p <- make_CIplot(obsT, kwh = "meankWh", xVar = "Q49_coded", xLab = "Main lumen type")
+p <- p + coord_flip() 
+ggplot2::ggsave(paste0("Q49_coded_CI.png"), p, 
+                width = 6, path = here::here("plots"))
+  
+kableExtra::kable(obsT, digits = 3) %>%
+  kable_styling()
