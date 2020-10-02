@@ -4,6 +4,7 @@
 library(data.table) # for data munching
 library(ggplot2) # for plots
 library(lubridate) # for dateTimes
+library(pwr) # pwr tests - can be easier to use than stats::
 library(hms) # hms
 library(GREENGridData) # for useful functions
 library(kableExtra) # tables
@@ -199,12 +200,12 @@ m2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", meankWh]
 # common sd??
 r <- lm(meankWh ~ Q7labAgg, data = dailyMeanLinkedDT)
 results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
-sigma <- results$sigma # rse
+rse <- results$sigma # rse
 
 diff <- abs(m1-m2)
 # Difference
 diff
-d <- diff/sigma
+d <- diff/rse
 
 n1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", nHouseholds]
 n2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", nHouseholds]
@@ -215,7 +216,7 @@ pwr95 <- pwr::pwr.t2n.test(n1 = n1,
                   d = , sig.level = 0.05, power = 0.8)
 pwr95$d
 # which means a kWh difference of
-pwr95$d * sigma
+pwr95$d * rse
   
 # what effect size would we need for the GG n? p = 0.1
 pwr90 <- pwr::pwr.t2n.test(n1 = n1,
@@ -223,7 +224,7 @@ pwr90 <- pwr::pwr.t2n.test(n1 = n1,
                   d = , sig.level = 0.1, power = 0.8)
 pwr90
 # which means a kWh difference of
-pwr90$d * sigma
+pwr90$d * rse
 
 # what effect size could we get with HEEPfull? p = 0.05
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1*10,
@@ -232,7 +233,7 @@ pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1*10,
 pwr95_HEEP2full
 #HEEP2full
 # which means a kWh difference of
-pwr95_HEEP2full$d * sigma
+pwr95_HEEP2full$d * rse
 
 # what effect size could we get with HEEP2pool? p = 0.05
 # HEEP2pool obtained - see table
@@ -243,7 +244,7 @@ pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1*80,
 pwr95_HEEP2poolOb
 # which means a kWh difference of
 # HEEP2pool
-pwr95_HEEP2poolOb$d * sigma
+pwr95_HEEP2poolOb$d * rse
 
 # report table
 kableExtra::kable(obsT, digits = 2) %>%
@@ -286,12 +287,12 @@ m2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", meankWh]
 # common sd??
 r <- lm(meankWh ~ hasHeatPump, data = dailyMeanLinkedDT)
 results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
-sigma <- results$sigma # rse
+rse <- results$sigma # rse
 
 diff <- abs(m1-m2)
 # Difference
 diff
-d <- diff/sigma
+d <- diff/rse
 
 n1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", nHouseholds]
 n2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", nHouseholds]
@@ -303,7 +304,7 @@ pwr95 <- pwr::pwr.t2n.test(n1 = n1,
 pwr95
 pwr95$d
 # which means a kWh difference of
-pwr95$d * sigma
+pwr95$d * rse
 
 # what effect size would we need for the GG n? p = 0.1
 pwr90 <- pwr::pwr.t2n.test(n1 = n1,
@@ -311,7 +312,7 @@ pwr90 <- pwr::pwr.t2n.test(n1 = n1,
                            d = , sig.level = 0.1, power = 0.8)
 pwr90
 # which means a kWh difference of
-pwr90$d * sigma
+pwr90$d * rse
 
 # what effect size could we get with HEEP2full? p = 0.05
 # Use HCS proportions
@@ -325,7 +326,7 @@ pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
 pwr95_HEEP2full
 #HEEP2full
 # which means a kWh difference of
-pwr95_HEEP2full$d * sigma
+pwr95_HEEP2full$d * rse
 
 # what effect size could we get with HEEP2full? p = 0.1
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
@@ -334,7 +335,7 @@ pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
 pwr95_HEEP2full
 #HEEP2full
 # which means a kWh difference of
-pwr95_HEEP2full$d * sigma
+pwr95_HEEP2full$d * rse
 
 getDrange <- function(nList,p){
   dt <- data.table::data.table()
@@ -353,7 +354,7 @@ getDrange <- function(nList,p){
 nList <- seq(100,1000,50)
 p <- 0.38
 resDT <- getDrange(nList, p)
-resDT[, kWhDiff := V4 * sigma]
+resDT[, kWhDiff := V4 * rse]
 pl <- ggplot2::ggplot(resDT, aes(x = V3, y = kWhDiff)) + 
   geom_line() +
   geom_point() +
@@ -376,7 +377,7 @@ pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
 pwr95_HEEP2poolOb
 # which means a kWh difference of
 # HEEP2pool
-pwr95_HEEP2poolOb$d * sigma
+pwr95_HEEP2poolOb$d * rse
 
 
 # > Lighting ----
@@ -409,3 +410,104 @@ ggplot2::ggsave(paste0("Q49_coded_CI.png"), p,
   
 kableExtra::kable(obsT, digits = 3) %>%
   kable_styling()
+
+# > Power?
+
+# Proportions ----
+
+# > Confidence intervals ----
+z <- qnorm(0.975) # p = 0.05
+p <- 0.4 #test a p
+n <- 150
+MoE <- z * sqrt(p*(1-p)/(n-1)) # calculate margin of error
+MoE
+# > Power ----
+# pwr.2p.test(h = , n = , sig.level =, power = ) 
+# calculate for single sample
+pwr::pwr.2p.test(h = , n = 360, sig.level = 0.05, power = 0.8) 
+# but this produces h which needs converting back to %
+
+# single sample test
+# n = n in the single sample
+pwr.p.test(h = , n = 360, sig.level = 0.05, power = 0.8)
+
+# power.prop.test is easier to use
+# calculate n for each group - e.g. % heat pumps in renters vs owner-occupiers
+stats::power.prop.test(n = NULL, p1 = 0.4, p2 = 0.25, 
+                       power = 0.8, sig.level = 0.05)
+
+
+calculateProportionsMoE <- function(props, sig, samples){
+  # calculate margins of error given prop, a range of significance thresholds (sigs) and sample sizes
+  nProps <- length(props)
+  nSamps <- length(samples)
+  #initialise results array
+  resultsArray <- array(numeric(nSamps*nProps),
+                        dim=c(nSamps,nProps)
+  )
+  # loop over samples
+  for (s in 1:nSamps){
+    # loop over significance values
+  for (p in 1:nProps){
+    me <- qnorm(1-(sig/2)) * sqrt(props[p]*(1 - props[p])/(samples[s]-1))
+    resultsArray[s,p] <- me # report effect size against sample size
+  }
+  }
+  dt <- data.table::as.data.table(resultsArray) # convert to dt for tidying
+  dt <- cbind(dt, samples)
+  longDT <- data.table::as.data.table(reshape2::melt(dt, id=c("samples")))
+  longDT <- data.table::setnames(longDT, "value", "moe")
+  longDT <- data.table::setnames(longDT, "variable", "proportion")
+  return(longDT) # returned the tidied & long form dt
+}
+
+samples <- seq(100,3000,50)
+props <- c(0.1, 0.2, 0.3, 0.4, 0.5)
+dt <- calculateProportionsMoE(props = props, # one sample
+                                    sig = 0.05,
+                                    samples = samples
+                                    )
+# need to recode vars
+# must be an easier way
+dt[, prop := ifelse(proportion == "V1", "10%", NA)]
+dt[, prop := ifelse(proportion == "V2", "20%", prop)]
+dt[, prop := ifelse(proportion == "V3", "30%", prop)]
+dt[, prop := ifelse(proportion == "V4", "40%", prop)]
+dt[, prop := ifelse(proportion == "V5", "50%", prop)]
+
+p <- ggplot2::ggplot(dt, aes(x = samples, y = 100*moe, colour = prop)) +
+  geom_point(alpha = 0.5) +
+  geom_line() +
+  labs(y = "Margin of error (+/-%)",
+       x = "Sample N (single sample)") +
+  scale_color_discrete(name="Proportion:") +
+  theme(legend.position="bottom") +
+  geom_vline(xintercept = 350, alpha = 0.3) +
+  geom_vline(xintercept = 700, alpha = 0.3) +
+  geom_vline(xintercept = 2500, alpha = 0.3)
+
+p + annotate(geom = "text", 
+             x = 350, 
+             y = 0.9*(max(p$data$moe)*100), 
+             label = paste0("n = 350"), 
+             hjust = "left") +
+  annotate(geom = "text", 
+           x = 700, 
+           y = 0.8*(max(p$data$moe)*100), 
+           label = paste0("n = 700"), 
+           hjust = "left") +
+  annotate(geom = "text", 
+           x = 2500, 
+           y = 0.9*(max(p$data$moe)*100), 
+           label = paste0("n = 2500"), 
+           hjust = "left") 
+
+ggplot2::ggsave("proportionsMoE.png", p, 
+                width = 6, path = here::here("plots"))
+
+# details
+dt[samples == 350]
+
+dt[samples == 700]
+
+dt[samples == 2500]
