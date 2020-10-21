@@ -12,6 +12,11 @@ library(kableExtra) # tables
 # Functions ----
 source(here::here("R", "functions.R"))
 
+# Paramaters ----
+HEEP2full <- 280
+HEEP2fullAvail <- 700
+HEEP2poolOb <- 2800
+
 # Data ----
 # Sourced from https://reshare.ukdataservice.ac.uk/853334/
 dataPath <- "~/temp/"
@@ -236,7 +241,6 @@ pwr90
 pwr90$d * rse
 
 # what effect size could we get with HEEPfull? p = 0.05
-HEEP2full <- 350
 n1 <- p1 * HEEP2full
 n2 <- HEEP2full - n1
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
@@ -248,7 +252,6 @@ pwr95_HEEP2full
 pwr95_HEEP2full$d * rse
 
 # what effect size could we get with HEEPfullAvail? p = 0.05
-HEEP2fullAvail <- 700
 n1 <- p1 * HEEP2fullAvail
 n2 <- HEEP2fullAvail - n1
 pwr95_HEEP2fullAvail <- pwr::pwr.t2n.test(n1 = n1,
@@ -261,7 +264,6 @@ pwr95_HEEP2fullAvail$d * rse
 
 # what effect size could we get with HEEP2pool? p = 0.05
 # HEEP2pool obtained - see table
-HEEP2poolOb <- 2800
 n1 <- p1 * HEEP2poolOb
 n2 <- HEEP2poolOb - n1
 pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
@@ -596,7 +598,7 @@ calculateProportionsMoE <- function(props, sig, samples){
   return(longDT) # returned the tidied & long form dt
 }
 
-samples <- seq(100,3000,50)
+samples <- seq(100,3000,10)
 props <- c(0.1, 0.2, 0.3, 0.4, 0.5)
 dt <- calculateProportionsMoE(props = props, # one sample
                                     sig = 0.05,
@@ -622,17 +624,17 @@ p <- ggplot2::ggplot(dt, aes(x = samples, y = 100*moe, colour = prop)) +
   geom_vline(xintercept = HEEP2poolOb, alpha = 0.3)
 
 p + annotate(geom = "text", 
-             x = 350, 
+             x = HEEP2full, 
              y = 0.9*(max(p$data$moe)*100), 
              label = paste0("n = 350"), 
              hjust = "left") +
   annotate(geom = "text", 
-           x = 700, 
+           x = HEEP2fullAvail, 
            y = 0.8*(max(p$data$moe)*100), 
            label = paste0("n = 700"), 
            hjust = "left") +
   annotate(geom = "text", 
-           x = 2500, 
+           x = HEEP2poolOb, 
            y = 0.9*(max(p$data$moe)*100), 
            label = paste0("n = 2500"), 
            hjust = "left") 
@@ -641,8 +643,8 @@ ggplot2::ggsave("proportionsMoE.png", p,
                 width = 6, path = here::here("plots"))
 
 # details
-dt[samples == 350]
+dt[samples == HEEP2full]
 
-dt[samples == 700]
+dt[samples == HEEP2fullAvail]
 
-dt[samples == 2800]
+dt[samples == HEEP2poolOb]
