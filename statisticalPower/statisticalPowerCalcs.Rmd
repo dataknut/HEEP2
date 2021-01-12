@@ -25,9 +25,12 @@ library(kableExtra) # tables
 source(here::here("R", "functions.R"))
 
 # Paramaters ----
-HEEP2full <- 280
-HEEP2fullAvail <- 700
-HEEP2poolOb <- 2800
+rmdParams <- list()
+# ref doc - proposed sample sizes ($ constrained)
+rmdParams$HEEP2full <- 280
+rmdParams$HEEP2fullAvail <- 700
+rmdParams$HEEP2poolOb <- 2800
+rmdParams$dataPath <- "~/data/NZ_greenGrid/" # change this to suit your local context
 ```
 
 # Introduction
@@ -37,27 +40,27 @@ Code and results. Full report at:
 
 This run assumes:
 
- * HEEP2full = `r HEEP2full`
- * HEEP2fullAvail = `r HEEP2fullAvail`
- * HEEP2poolOb = `r HEEP2poolOb`
+ * HEEP2full = `r rmdParams$HEEP2full`
+ * HEEP2fullAvail = `r rmdParams$HEEP2fullAvail`
+ * HEEP2poolOb = `r rmdParams$HEEP2poolOb`
 
 # Data
 
 Load the data - sourced from https://reshare.ukdataservice.ac.uk/853334/
 
 ```{r loadData}
-dataPath <- "~/temp/"
+
 # half-hourly total household consumption (pre-prepared)
-totalF <- paste0(dataPath, "halfHourImputedTotalDemand_Fixed.csv.gz")
+totalF <- paste0(rmdParams$dataPath, "halfHourImputedTotalDemand_Fixed.csv.gz")
 
 # half-hourly lighting consumption
-lightingF <- paste0(dataPath, "halfHourLighting.csv.gz")
+lightingF <- paste0(rmdParams$dataPath, "halfHourLighting.csv.gz")
 
 # half-hourly heat pump consumption
-heatPumpF <- paste0(dataPath, "halfHourHeatPump.csv.gz")
+heatPumpF <- paste0(rmdParams$dataPath, "halfHourHeatPump.csv.gz")
 
 # household attribute data
-hhF <- paste0(dataPath, "ggHouseholdAttributesSafe_2019-04-09.csv.gz")
+hhF <- paste0(rmdParams$dataPath, "ggHouseholdAttributesSafe_2019-04-09.csv.gz")
 ```
 
 Now prep and check the data
@@ -117,7 +120,7 @@ summary(totalDT)
 
 Process and check household data
 
-```{r, hhData}
+```{r hhData}
 # > household ----
 hhDT <- data.table::fread(hhF)
 hhDT <- code_Q7(hhDT)
@@ -151,7 +154,7 @@ hist(dt$meankWh)
 
 Check if the negative values are to do with PV
 
-```{r, checkPV}
+```{r checkPV}
 # need to check -ve = mid-day, if not is not PV must just be errors?
 totalDT[, testValues := "> 0"]
 totalDT[, testValues := ifelse(meanConsumptionkWh == 0, "0", testValues)]
@@ -197,7 +200,7 @@ dailyMeanLinkedDT <- dailyMeanLinkedDT[!is.na(meankWh)]
 
 # Statistical power calculations
 
-```{r, setFunctions}
+```{r setFunctions}
 
 make_p95Table <- function(dt,groupVar, kWh = "meankWh"){
   # aggregates kWh
@@ -246,7 +249,7 @@ make_CIplot <- function(t, kwh = "meankWh", xVar, xLab){
 
 Compare pre 2000 with after
 
-```{r, dwellingAgeDesc}
+```{r dwellingAgeDesc}
 obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(Q7labAgg) & !is.na(meankWh)], 
                       groupVar = "Q7labAgg")
 
@@ -257,7 +260,7 @@ kableExtra::kable(obsT, digits = 3) %>%
   kable_styling()
 ```
 
-```{r, ggDwellingAge}
+```{r ggDwellingAge}
 # What 'effect size' do we observe?
 m1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", meankWh]
 m2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", meankWh]
@@ -294,21 +297,21 @@ pwr90
 pwr90$d * rse
 ```
 
-```{r, dwellingAgeHEEP2}
+```{r dwellingAgeHEEP2}
 # what effect size could we get with HEEPfull? p = 0.05
-n1 <- p1 * HEEP2full
-n2 <- HEEP2full - n1
+n1 <- p1 * rmdParams$HEEP2full
+n2 <- rmdParams$HEEP2full - n1
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.05, power = 0.8)
 pwr95_HEEP2full
-#HEEP2full
+#rmdParams$HEEP2full
 # which means a kWh difference of
 pwr95_HEEP2full$d * rse
 
 # what effect size could we get with HEEPfullAvail? p = 0.05
-n1 <- p1 * HEEP2fullAvail
-n2 <- HEEP2fullAvail - n1
+n1 <- p1 * rmdParams$HEEP2fullAvail
+n2 <- rmdParams$HEEP2fullAvail - n1
 pwr95_HEEP2fullAvail <- pwr::pwr.t2n.test(n1 = n1,
                                      n2 = n2,
                                      d = , sig.level = 0.05, power = 0.8)
@@ -319,8 +322,8 @@ pwr95_HEEP2fullAvail$d * rse
 
 # what effect size could we get with HEEP2pool? p = 0.05
 # HEEP2pool obtained - see table
-n1 <- p1 * HEEP2poolOb
-n2 <- HEEP2poolOb - n1
+n1 <- p1 * rmdParams$HEEP2poolOb
+n2 <- rmdParams$HEEP2poolOb - n1
 pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.05, power = 0.8)
@@ -338,7 +341,8 @@ kableExtra::kable(obsT, digits = 2) %>%
 ## Heat pumps
 
 ### Compare with/without
-```{r, ggHeatPump}}
+
+```{r ggHeatPump}}
 # GG
 t <- table(hhDT$`Heat pump number`, useNA = "always")
 t
@@ -366,7 +370,7 @@ kableExtra::kable(obsT, digits = 2) %>%
   kable_styling()
 ```
 
-```{r, heatPumpHEEP2}
+```{r heatPumpHEEP2}
 # What 'effect size' do we observe?
 m1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", meankWh]
 m2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", meankWh]
@@ -404,8 +408,8 @@ pwr90$d * rse
 # what effect size could we get with HEEP2full? p = 0.05
 # Use HCS proportions
 # HCS: 45% owned, 27% renters, overall = 38% (Vicki White and Mark Jones 2017)
-n1 <- HEEP2full - (HEEP2full*0.38)
-n2 <- HEEP2full*0.38
+n1 <- rmdParams$HEEP2full - (rmdParams$HEEP2full*0.38)
+n2 <- rmdParams$HEEP2full*0.38
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
                                      n2 = n2,
                                      d = , sig.level = 0.05, power = 0.8)
@@ -415,7 +419,7 @@ pwr95_HEEP2full
 pwr95_HEEP2full$d * rse
 ```
 
-```{r, heatPumpPowerPlot}
+```{r heatPumpPowerPlot}
 # for drawing plot
 getDrange <- function(nList,p){
   dt <- data.table::data.table()
@@ -438,9 +442,9 @@ resDT[, kWhDiff := V4 * rse]
 pl <- ggplot2::ggplot(resDT, aes(x = V3, y = kWhDiff)) + 
   geom_line() +
   geom_point() +
-  geom_vline(xintercept = HEEP2full, alpha = 0.3) +
-  geom_vline(xintercept = HEEP2fullAvail, alpha = 0.3) +
-  geom_vline(xintercept = HEEP2poolOb, alpha = 0.3) +
+  geom_vline(xintercept = rmdParams$HEEP2full, alpha = 0.3) +
+  geom_vline(xintercept = rmdParams$HEEP2fullAvail, alpha = 0.3) +
+  geom_vline(xintercept = rmdParams$HEEP2poolOb, alpha = 0.3) +
   labs(x = "Total sample size",
        y = "Mean kWh difference",
        caption = paste0("p = 0.05, power = 0.8\n",
@@ -451,11 +455,12 @@ ggplot2::ggsave("kWhDiff_rangeHeatPumps.png", pl,
 ```
 
 Now calculate the different d & kWh for the sample sizes
-```{r, heatPumpPowerHEEP2}
+
+```{r heatPumpPowerHEEP2}
 # what effect size could we get with HEEP2poolAvail? p = 0.05
 # HEEP2pool obtained - see table
-n1 <- HEEP2fullAvail - (HEEP2fullAvail*0.38)
-n2 <- HEEP2fullAvail*0.38
+n1 <- rmdParams$HEEP2fullAvail - (rmdParams$HEEP2fullAvail*0.38)
+n2 <- rmdParams$HEEP2fullAvail*0.38
 pwr95_HEEP2poolAvail <- pwr::pwr.t2n.test(n1 = n1,
                                        n2 = n2,
                                        d = , sig.level = 0.05, power = 0.8)
@@ -467,8 +472,8 @@ pwr95_HEEP2poolAvail$d * rse
 # what effect size could we get with HEEP2poolObtained? p = 0.05
 # HEEP2pool obtained - see table
 
-n1 <- HEEP2poolOb - (HEEP2poolOb*0.38)
-n2 <- HEEP2poolOb*0.38
+n1 <- rmdParams$HEEP2poolOb - (rmdParams$HEEP2poolOb*0.38)
+n2 <- rmdParams$HEEP2poolOb*0.38
 pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
                                        n2 = n2,
                                        d = , sig.level = 0.05, power = 0.8)
@@ -480,7 +485,7 @@ pwr95_HEEP2poolOb$d * rse
 
 ### Compare morning vs evening
 
-```{r, heatPumpComparePerid}
+```{r heatPumpComparePerid}
 # >> compare am/pm ----
 # use HP only data
 # remove -ve values
@@ -493,7 +498,8 @@ ggplot2::ggplot(plotDT, aes(x = r_halfHour, y = meankWh, colour = season)) +
   geom_line()
 ```
 
-```{r, makeComparisonPlots}
+
+```{r makeComparisonPlots}
 # Based on the line plot...
 
 heatPumpDT[, period := ifelse(lubridate::hour(r_dateTimeHalfHour) >= 4 &
@@ -542,7 +548,7 @@ kableExtra::kable(obsT, digits = 3) %>%
 
 Now power calcs - needs paired
 
-```{r, heatPumpPairedPower}
+```{r heatPumpPairedPower}
 # >> Power calcs - paired ----
 
 # What 'effect size' do we observe?
@@ -572,7 +578,7 @@ getPairedD <- function(nList,rse){
   return(dt)
 }
 
-nList <- c(uniqueN(dailyMeanHeatPumpDT$linkID), HEEP2full,HEEP2fullAvail,HEEP2poolOb)
+nList <- c(uniqueN(dailyMeanHeatPumpDT$linkID), rmdParams$HEEP2full,rmdParams$HEEP2fullAvail,rmdParams$HEEP2poolOb)
 getPairedD(nList, rse) # print out the d and kWh diff required for each n
 
 
@@ -592,7 +598,7 @@ ggplot2::ggsave("kWhDiff_rangeHeatPumpsSubgroups.png", pl,
 
 ## Lighting
 
-```{r, lightingGG}
+```{r lightingGG}
 # GG
 t <- table(hhDT$Q49_coded, useNA = "always")
 t
@@ -628,7 +634,7 @@ kableExtra::kable(obsT, digits = 3) %>%
 
 ## Proportions
 
-```{r, calcMoE}
+```{r calcMoE}
 # > Confidence intervals ----
 z <- qnorm(0.975) # p = 0.05
 p <- 0.4 #test a p
@@ -637,20 +643,20 @@ MoE <- z * sqrt(p*(1-p)/(n-1)) # calculate margin of error
 MoE
 ```
 
-```{r, calcProportionsPower}
+```{r calcProportionsPower}
 # > Power ----
 # pwr.2p.test(h = , n = , sig.level =, power = ) 
 # calculate for single sample
-pwr::pwr.2p.test(h = , n = HEEP2full, sig.level = 0.05, power = 0.8) 
+pwr::pwr.2p.test(h = , n = rmdParams$HEEP2full, sig.level = 0.05, power = 0.8) 
 # but this produces h which needs converting back to %
 
 # single sample test
 # n = n in the single sample
-pwr.p.test(h = , n = HEEP2full, sig.level = 0.05, power = 0.8)
+pwr.p.test(h = , n = rmdParams$HEEP2full, sig.level = 0.05, power = 0.8)
 ```
 
 Test n for different p and proportions within the single sample
-```{r, propMulti}
+```{r propMulti}
 # power.prop.test is easier to use
 # calculate n for each group - e.g. % heat pumps in renters vs owner-occupiers
 # 40% & 25%
@@ -682,7 +688,7 @@ stats::power.prop.test(n = NULL, p1 = 0.1, p2 = 0.15,
 
 Create a proportions plot and table
 
-```{r, propsPlot}
+```{r propsPlot}
 
 calculateProportionsMoE <- function(props, sig, samples){
   # calculate margins of error given prop, a range of significance thresholds (sigs) and sample sizes
@@ -729,24 +735,24 @@ p <- ggplot2::ggplot(dt, aes(x = samples, y = 100*moe, colour = prop)) +
        x = "Sample N (single sample)") +
   scale_color_discrete(name="Proportion:") +
   theme(legend.position="bottom") +
-  geom_vline(xintercept = HEEP2full, alpha = 0.3) +
-  geom_vline(xintercept = HEEP2fullAvail, alpha = 0.3) +
-  geom_vline(xintercept = HEEP2poolOb, alpha = 0.3)
+  geom_vline(xintercept = rmdParams$HEEP2full, alpha = 0.3) +
+  geom_vline(xintercept = rmdParams$HEEP2fullAvail, alpha = 0.3) +
+  geom_vline(xintercept = rmdParams$HEEP2poolOb, alpha = 0.3)
 
 p <- p + annotate(geom = "text", 
-             x = HEEP2full, 
+             x = rmdParams$HEEP2full, 
              y = 0.9*(max(p$data$moe)*100), 
-             label = paste0("n =", HEEP2full), 
+             label = paste0("n =", rmdParams$HEEP2full), 
              hjust = "left") +
   annotate(geom = "text", 
-           x = HEEP2fullAvail, 
+           x = rmdParams$HEEP2fullAvail, 
            y = 0.8*(max(p$data$moe)*100), 
-           label = paste0("n = ", HEEP2fullAvail), 
+           label = paste0("n = ", rmdParams$HEEP2fullAvail), 
            hjust = "left") +
   annotate(geom = "text", 
-           x = HEEP2poolOb, 
+           x = rmdParams$HEEP2poolOb, 
            y = 0.9*(max(p$data$moe)*100), 
-           label = paste0("n = ", HEEP2poolOb), 
+           label = paste0("n = ", rmdParams$HEEP2poolOb), 
            hjust = "right") 
 
 ggplot2::ggsave("proportionsMoE.png", p, 
@@ -755,11 +761,11 @@ ggplot2::ggsave("proportionsMoE.png", p,
 p
 
 # details
-dt[samples == HEEP2full]
+dt[samples == rmdParams$HEEP2full]
 
-dt[samples == HEEP2fullAvail]
+dt[samples == rmdParams$HEEP2fullAvail]
 
-dt[samples == HEEP2poolOb]
+dt[samples == rmdParams$HEEP2poolOb]
 ```
 
 # The end
