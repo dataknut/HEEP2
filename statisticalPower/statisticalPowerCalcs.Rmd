@@ -4,47 +4,96 @@ author: "Ben Anderson"
 date: "`r Sys.time()`"
 output: 
   html_document:
-    toc: true
-    toc_depth: 3
+    toc: TRUE
+    toc_depth: 4
+    number_sections: TRUE
     toc_float: TRUE
+bibliography: '`r paste0(here::here(), "/refs.bib")`'
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE) # by default all code is reported
 
 # Packages ----
-library(data.table) # for data munching
-library(ggplot2) # for plots
-library(lubridate) # for dateTimes
-library(pwr) # pwr tests - can be easier to use than stats::
-library(hms) # hms
+
+# install from github if needed
+githubPackages <- c("GREENGridData", "dkUtils")
+#devtools::install_github("cfsOtago/GREENGridData")
+#devtools::install_github("dataknut/dkUtils")
 library(GREENGridData) # for useful functions
-library(kableExtra) # tables
+library(dkUtils) # for useful functions
+
+# install from cran if needed
+cranPackages <- c("data.table", # for data munching
+               "ggplot2", # for plots
+               "here", # here or there?
+               "lubridate", # for dateTimes
+               "pwr", # pwr tests - can be easier to use than stats::
+               "hms", # hms
+               "kableExtra" # tables
+               )
+
+GREENGridData::loadLibraries(cranPackages) # load (or install & load) the packages we need
 
 # Functions ----
 source(here::here("R", "functions.R"))
 
 # Paramaters ----
 rmdParams <- list()
-# ref doc - proposed sample sizes ($ constrained)
-rmdParams$HEEP2full <- 280
-rmdParams$HEEP2fullAvail <- 700
-rmdParams$HEEP2poolOb <- 2800
 rmdParams$dataPath <- "~/data/NZ_greenGrid/" # change this to suit your local context
 ```
 
+# Executive Summary
+Skeleton ToC so heading numbers match full report
+
 # Introduction
-Code and results. Full report at: 
+
+# Best practice in ‘energy studies’
+
+# Recruitment methods
+
+# Pathways to a New Zealand household energy observatory
+
+# What we need to know now
+
+# Response rates
+
+# Sample sizes, ‘effect’ sizes and precision
+
+## How large is ‘large enough’?
+
+## Estimates of precision
+
+Code and results for this section. Full report at: 
 
 > NB This is a bare bones .Rmd file. Please see the report for full details.
 
-This run assumes:
+In this section we present analysis of the precision (confidence intervals or margins of error) that will be available under different sample sizes and use this to illustrate the uncertainty of estimates at the whole sample and sub-group levels. This will give some guidance as the uncertainty to be expected when comparing groups within the samples.
 
- * HEEP2full = `r rmdParams$HEEP2full`
- * HEEP2fullAvail = `r rmdParams$HEEP2fullAvail`
+Given the discussion of HEEP2pool and HEEP2full above we consider sample sizes below 3,000 since it is unlikely that obtained HEEP2pool would exceed this magnitude and neither therefore could HEEP2full even if sufficient additional funding could be obtained. We therefore provide estimates for the following sample sizes:
+
+ * 2,800 - approximately the pool available from HEW who are recontacted and who complete the HEEP2 survey module (HEEP2pool obtained)
+ * 700 – approximately the pool who consent to HEEP2full and which could be monitored with additional co-funding (HEEP2full available)
+ * 280 – approximately the envisaged HEEP2full sample without additional co-funding (HEEP2full)
+
+> Check !!
+
+```{r setSampleSizes, echo=TRUE}
+# ref report Section 8.2 - proposed sample sizes ($ constrained)
+rmdParams$HEEP2poolOb <- 2800
+rmdParams$HEEP2fullAvail <- 700
+rmdParams$HEEP2full <- 280
+```
+
+Parameters:
+
  * HEEP2poolOb = `r rmdParams$HEEP2poolOb`
+ * HEEP2fullAvail = `r rmdParams$HEEP2fullAvail`
+ * HEEP2full = `r rmdParams$HEEP2full`
 
-# Data
+(see report Section 8.2)
+
+#### Data
 
 Load the data - sourced from https://reshare.ukdataservice.ac.uk/853334/
 
@@ -198,7 +247,9 @@ dailyMeanLinkedDT <- dailyMeanLinkedDT[!is.na(meankWh)]
 ```
 
 
-# Statistical power calculations
+### Numeric values
+
+Some set up code
 
 ```{r setFunctions}
 
@@ -245,69 +296,101 @@ make_CIplot <- function(t, kwh = "meankWh", xVar, xLab){
 }
 ```
 
-## Dwelling age
+In the case of numeric values, in addition to the two assumptions above (p value and power), these calculations also require an estimate of the mean and standard deviation of the variable to be measured. Where there is no existing data that can be used to estimate it, evidence from the literature is generally used.
 
-Compare pre 2000 with after
+In order to provide guidance, the following sections repeat elements of this analysis for categories of dwellings that are available in the GREENGrid data. The NZ GREENGrid Household Electricity Demand data (Anderson et al. 2018) is used to calculate mean daily energy use (kWh) by category and we report power calculations using, where possible, proportions available in the 2015 Housing Conditions Survey. For the purposes of this analysis we have excluded the four GREENGrid dwellings with PV panels as there is some difficulty in estimating total electricity consumption  in these cases.
 
-```{r dwellingAgeDesc}
+It is important to note that this analysis cannot determine the ‘correct’ sample size for the HEEP2pool or HEEP2full samples but will indicate the likely precision and thus the level of Type I error that might have to be accepted to conclude that differences are statistically significant. Clearly the analysis only reports a small number of power analyses that appear relevant at this time. However future work could re-run the analysis using other categories and/or data sources as required. As will become clear, this would require data sources which can be used to calculate:
+
+ * The mean difference in kWh (or other indicator) between different groups
+ * The residual standard error of the kWh across these groups and
+ * The likely proportion of dwellings in these groups in the population
+
+In most cases this will require access to the original data sources unless these values can be supplied by the data owners.
+
+#### Mean daily electricity consumption (kWh) by dwelling age
+
+Compare pre 2000 with after.
+
+```{r dwellingAgeGGDesc}
 obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(Q7labAgg) & !is.na(meankWh)], 
                       groupVar = "Q7labAgg")
+
+kableExtra::kable(obsT[Threshold %like% "0.05"], caption = "For report Table 6", digits = 3) %>%
+  kable_styling()
 
 obsT[, kWh := meankWh]
 make_CIplot(obsT, xVar = "Q7labAgg", xLab = "Dwelling age")
 
-kableExtra::kable(obsT, digits = 3) %>%
-  kable_styling()
 ```
 
-```{r ggDwellingAge}
+```{r dwellingAgeGG}
+message("Dwelling age")
 # What 'effect size' do we observe?
-m1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", meankWh]
-m2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", meankWh]
+m1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", meankWh] # mean 1
+m2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", meankWh] # mean 2
 
-# common sd??
-r <- lm(meankWh ~ Q7labAgg, data = dailyMeanLinkedDT)
-results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
-rse <- results$sigma # rse
+# estimate a linear model predicting mean kWh from dwelling age
+ggModel <- lm(meankWh ~ Q7labAgg, data = dailyMeanLinkedDT)
+ggModelS <- summary(ggModel) # we need the rse https://online.stat.psu.edu/stat462/node/94/
+ggModelRse <- ggModelS$sigma # rse
+message("RSE from gg model: ", round(ggModelRse,3))
 
-diff <- abs(m1-m2)
-# Difference
-diff
-d <- diff/rse
+
+ggDiff <- abs(m1-m2) # observed difference in meankWh
+message("Observed kWh absolute difference from gg data: ", round(ggDiff,2))
+
+gg_d <- ggDiff/ggModelRse # estimate effect size (d)
+message("kWh effect size estimate from gg data: ", round(gg_d,2))
 
 n1 <- obsT[Q7labAgg == "< 1999" & Threshold %like% "0.05", nHouseholds]
 n2 <- obsT[Q7labAgg == ">= 2000" & Threshold %like% "0.05", nHouseholds]
 
-p1 <- n1/(n1 + n2) # with
-
 # what effect size would we need for the GG n? p = 0.05
-pwr95 <- pwr::pwr.t2n.test(n1 = n1,
+pwr95_gg <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.05, power = 0.8)
-pwr95$d
-# which means a kWh difference of
-pwr95$d * rse
+
+# create reporting function for subsequent re-use
+reportEffectSize <- function(name, pwr,rse){
+  message("--\nSample: ", name)
+  message(round(pwr$d,3), " (effect size for this sample (n = ", pwr$n1 + pwr$n2, ", p = 0.05)")
+  message(round(pwr$d * rse,3), " (kWh difference required to detect this effect size at p = 0.05)")
+  return(c(name, pwr$n1 + pwr$n2, round(pwr$d,3), round(pwr$d * rse,3))) # return these values as a list for capture into a table reporting row
+}
+
+gg <- reportEffectSize("GreenGrid", pwr95_gg,ggModelRse)
   
 # what effect size would we need for the GG n? p = 0.1
-pwr90 <- pwr::pwr.t2n.test(n1 = n1,
+pwr90_gg <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.1, power = 0.8)
-pwr90
-# which means a kWh difference of
-pwr90$d * rse
+message("-\nTest p = 0.1")
+message ("What effect size would we need for the GG sample n? (p = 0.1): ", round(pwr90_gg$d,2))
+
+message("Which means a kWh difference of: ", round(pwr90_gg$d * ggModelRse,2))
+
 ```
 
+We should have seen that the 'required' effect size and thus the kWh difference decreases as we relax the p value (and so increase uncertainty...)
+
 ```{r dwellingAgeHEEP2}
+# Now repeat the process of effect size estimation for each of the proposed sample sizes
+# To do this we re-use the rse we got from the GG model (we have to assume it's also true of the future HEEP2 samples)
+# we also assume the same split of dwelling ages since HCS does not report this
+
 # what effect size could we get with HEEPfull? p = 0.05
-n1 <- p1 * rmdParams$HEEP2full
-n2 <- rmdParams$HEEP2full - n1
+p1 <- n1/(n1+n2) #proportion of GG households in first category (pre 1999)
+n1 <- p1 * rmdParams$HEEP2full # what n would this be in HEEP?
+n2 <- rmdParams$HEEP2full - n1 # need n2 (other group)
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2full
-#rmdParams$HEEP2full
-# which means a kWh difference of
-pwr95_HEEP2full$d * rse
+
+# first row of effect sizes table
+r1 <- c("Sample", "N", "Effect size", "kWh difference")
+
+rhf <- reportEffectSize(name = "HEEP2full", pwr95_HEEP2full, ggModelRse)
 
 # what effect size could we get with HEEPfullAvail? p = 0.05
 n1 <- p1 * rmdParams$HEEP2fullAvail
@@ -315,10 +398,8 @@ n2 <- rmdParams$HEEP2fullAvail - n1
 pwr95_HEEP2fullAvail <- pwr::pwr.t2n.test(n1 = n1,
                                      n2 = n2,
                                      d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2fullAvail
-#HEEP2full
-# which means a kWh difference of
-pwr95_HEEP2fullAvail$d * rse
+
+rhfA <- reportEffectSize(name = "HEEP2fullAvail", pwr95_HEEP2fullAvail, ggModelRse)
 
 # what effect size could we get with HEEP2pool? p = 0.05
 # HEEP2pool obtained - see table
@@ -327,22 +408,21 @@ n2 <- rmdParams$HEEP2poolOb - n1
 pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
                   n2 = n2,
                   d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2poolOb
-# which means a kWh difference of
-# HEEP2pool
-pwr95_HEEP2poolOb$d * rse
+rhfpb <- reportEffectSize(name = "HEEP2poolOb", pwr95_HEEP2poolOb, ggModelRse)
 
-# report table
-kableExtra::kable(obsT, digits = 2) %>%
+# report effect sizes table
+t <- rbind(r1,gg, rhf,rhfA,rhfpb)
+kableExtra::kable(t, digits = 2) %>%
   kable_styling()
+
+message("RSE from gg model: ", round(ggModelRse,3))
+
 ```
 
 
-## Heat pumps
+####	Mean daily electricity consumption (kWh) by presence of heat pump
 
-### Compare with/without
-
-```{r ggHeatPump}}
+```{r heatPumpGGDesc}}
 # GG
 t <- table(hhDT$`Heat pump number`, useNA = "always")
 t
@@ -354,11 +434,6 @@ dailyMeanLinkedDT[, heatPumps := ifelse(is.na(`Heat pump number`), 0, heatPumps)
 dailyMeanLinkedDT[, .(nHHs = uniqueN(linkID)), keyby = .(heatPumps)]
 
 obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(heatPumps)], "heatPumps")
-obsT[, kWh := meankWh]
-make_CIplot(obsT, kwh = "meankWh", xVar = "heatPumps", xLab = "N heat pumps")
-
-kableExtra::kable(obsT, digits = 3) %>%
-  kable_styling()
 
 # switch to binary for HPs - yes or no
 dailyMeanLinkedDT[, hasHeatPump := "No"]
@@ -366,25 +441,38 @@ dailyMeanLinkedDT[, hasHeatPump := ifelse(heatPumps > 0, "Yes", hasHeatPump)]
 obsT <- make_p95Table(dailyMeanLinkedDT[!is.na(hasHeatPump)], "hasHeatPump")
 
 # report table
-kableExtra::kable(obsT, digits = 2) %>%
+kableExtra::kable(obsT[Threshold %like% "0.05"], caption = "For report Table 8",
+                  digits = 3) %>%
   kable_styling()
+
+obsT[, kWh := meankWh]
+make_CIplot(obsT, kwh = "meankWh", xVar = "hasHeatPump", xLab = "Presence of heat pumps")
+
 ```
 
-```{r heatPumpHEEP2}
+```{r heatPumpGG}
+# Follows the same process as before
+# uses non-specific variables to store rse etc so be warned - context is king!
 # What 'effect size' do we observe?
 m1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", meankWh]
 m2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", meankWh]
 
-# common sd??
+# linear model - this time predicting meankWh from owning a heat pump
 r <- lm(meankWh ~ hasHeatPump, data = dailyMeanLinkedDT)
 results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
-rse <- results$sigma # rse
+rse <- results$sigma # rse from this new model
+message("Observed residual error (RSE)")
+rse
 
-diff <- abs(m1-m2)
-# Difference
+diff <- abs(m1-m2) # observed difference in meankWh
+message("Observed difference in means")
 diff
-d <- diff/rse
 
+d <- diff/rse # estimate effect size (d)
+message("effect size (d)")
+d
+
+# how many did we have in gg?
 n1 <- obsT[hasHeatPump == "No" & Threshold %like% "0.05", nHouseholds]
 n2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", nHouseholds]
 
@@ -392,20 +480,15 @@ n2 <- obsT[hasHeatPump == "Yes" & Threshold %like% "0.05", nHouseholds]
 pwr95 <- pwr::pwr.t2n.test(n1 = n1,
                            n2 = n2,
                            d = , sig.level = 0.05, power = 0.8)
-pwr95
-pwr95$d
-# which means a kWh difference of
-pwr95$d * rse
 
-# what effect size would we need for the GG n? p = 0.1
-pwr90 <- pwr::pwr.t2n.test(n1 = n1,
-                           n2 = n2,
-                           d = , sig.level = 0.1, power = 0.8)
-pwr90
-# which means a kWh difference of
-pwr90$d * rse
+gg <- reportEffectSize(name = "GreenGrid", pwr95, rse)
+```
 
+Now estimate HEEP2 effect sizes etc
+
+```{r heatPumpHEEP2}
 # what effect size could we get with HEEP2full? p = 0.05
+# same process as before
 # Use HCS proportions
 # HCS: 45% owned, 27% renters, overall = 38% (Vicki White and Mark Jones 2017)
 n1 <- rmdParams$HEEP2full - (rmdParams$HEEP2full*0.38)
@@ -413,10 +496,36 @@ n2 <- rmdParams$HEEP2full*0.38
 pwr95_HEEP2full <- pwr::pwr.t2n.test(n1 = n1,
                                      n2 = n2,
                                      d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2full
-#HEEP2full
-# which means a kWh difference of
-pwr95_HEEP2full$d * rse
+rhf <- reportEffectSize(name = "HEEP2full", pwr95_HEEP2full, rse)
+
+# what effect size could we get with HEEP2poolAvail? p = 0.05
+n1 <- rmdParams$HEEP2fullAvail - (rmdParams$HEEP2fullAvail*0.38)
+n2 <- rmdParams$HEEP2fullAvail*0.38
+pwr95_HEEP2fullAvail <- pwr::pwr.t2n.test(n1 = n1,
+                                       n2 = n2,
+                                       d = , sig.level = 0.05, power = 0.8)
+
+rhfA <- reportEffectSize(name = "HEEP2fullAvail", pwr95_HEEP2fullAvail, rse)
+
+
+# what effect size could we get with HEEP2poolObtained? p = 0.05
+# HEEP2pool obtained - see table
+
+n1 <- rmdParams$HEEP2poolOb - (rmdParams$HEEP2poolOb*0.38)
+n2 <- rmdParams$HEEP2poolOb*0.38
+pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
+                                       n2 = n2,
+                                       d = , sig.level = 0.05, power = 0.8)
+
+rhfpb <- reportEffectSize(name = "HEEP2poolOb", pwr95_HEEP2poolOb, rse)
+
+# report effect sizes table
+t <- rbind(r1,gg, rhf,rhfA,rhfpb)
+kableExtra::kable(t, caption = "For report Table 9") %>%
+  kable_styling()
+
+message("RSE from gg model: ", round(rse,3))
+
 ```
 
 ```{r heatPumpPowerPlot}
@@ -448,42 +557,16 @@ pl <- ggplot2::ggplot(resDT, aes(x = V3, y = kWhDiff)) +
   labs(x = "Total sample size",
        y = "Mean kWh difference",
        caption = paste0("p = 0.05, power = 0.8\n",
-                        "% with heat pump = ",100*p))
+                        "% with heat pump = ",100*p, "\n",
+                        "Reference lines at n = ", rmdParams$HEEP2full, ", ", 
+                        rmdParams$HEEP2fullAvail, ", ", rmdParams$HEEP2poolOb))
 pl
 ggplot2::ggsave("kWhDiff_rangeHeatPumps.png", pl, 
                 width = 6, path = here::here("plots"))
 ```
 
-Now calculate the different d & kWh for the sample sizes
 
-```{r heatPumpPowerHEEP2}
-# what effect size could we get with HEEP2poolAvail? p = 0.05
-# HEEP2pool obtained - see table
-n1 <- rmdParams$HEEP2fullAvail - (rmdParams$HEEP2fullAvail*0.38)
-n2 <- rmdParams$HEEP2fullAvail*0.38
-pwr95_HEEP2poolAvail <- pwr::pwr.t2n.test(n1 = n1,
-                                       n2 = n2,
-                                       d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2poolAvail
-# which means a kWh difference of
-# HEEP2pool
-pwr95_HEEP2poolAvail$d * rse
-
-# what effect size could we get with HEEP2poolObtained? p = 0.05
-# HEEP2pool obtained - see table
-
-n1 <- rmdParams$HEEP2poolOb - (rmdParams$HEEP2poolOb*0.38)
-n2 <- rmdParams$HEEP2poolOb*0.38
-pwr95_HEEP2poolOb <- pwr::pwr.t2n.test(n1 = n1,
-                                       n2 = n2,
-                                       d = , sig.level = 0.05, power = 0.8)
-pwr95_HEEP2poolOb
-# which means a kWh difference of
-# HEEP2pool
-pwr95_HEEP2poolOb$d * rse
-```
-
-### Compare morning vs evening
+#### Mean morning and evening demand due to heat pumps in winter
 
 ```{r heatPumpComparePerid}
 # >> compare am/pm ----
@@ -535,20 +618,22 @@ dailyMeanHeatPumpDTLinkedDT <- dailyMeanHeatPumpDT[hhDT]
 
 obsT <- make_p95Table(dailyMeanHeatPumpDTLinkedDT[!is.na(period)], groupVar = "period")
 
+kableExtra::kable(obsT[Threshold %like% "0.05"], caption = "for report Table 10",
+                  digits = 3) %>%
+  kable_styling()
+
 obsT[, kWh := meankWh]
 p <- make_CIplot(obsT[season == "winter"], # winter only
                  kwh = "meankWh", xVar = "period", xLab = "Period")
 p <- p + coord_flip() + labs(y = "Mean kWh")
+p
 ggplot2::ggsave(paste0("heatPumpByPeriod_Winter_CI.png"), p, 
                 width = 6, path = here::here("plots"))
-
-kableExtra::kable(obsT, digits = 3) %>%
-  kable_styling()
 ```
 
-Now power calcs - needs paired
+Now power calcs - needs paired as the observations are on the same dwellings at each time point.
 
-```{r heatPumpPairedPower}
+```{r heatPumpAMPMGGModel}
 # >> Power calcs - paired ----
 
 # What 'effect size' do we observe?
@@ -560,12 +645,19 @@ m2 <- obsT[period != "04:00 - 10:00" & Threshold %like% "0.05", meankWh]
 r <- lm(meankWh ~ period, data = dailyMeanHeatPumpDTLinkedDT)
 results <- summary(r) # we need the rse https://online.stat.psu.edu/stat462/node/94/
 rse <- results$sigma # rse
-
+message("Observed RSE: ", round(rse,3))
 diff <- abs(m1-m2)
 # Difference
-diff
+message("Observed kWh difference: ", round(diff,3))
 d <- diff/rse
+# Effect size
+message("Effect size: ", round(d,2))
+```
 
+Now calculate what we would need
+
+```{r pairedSampleES}
+# this function loops over the sample sizes
 getPairedD <- function(nList,rse){
   dt <- data.table::data.table()
   for(n in nList){
@@ -575,17 +667,25 @@ getPairedD <- function(nList,rse){
     res <- as.data.table(c(n, pres$d, pres$d * rse))
     dt <- rbind(dt,transpose(res))
   }
+  setnames(dt, c("V1", "V2", "V3"), c("Sample", "d", "kWh_diff"))
   return(dt)
 }
 
-nList <- c(uniqueN(dailyMeanHeatPumpDT$linkID), rmdParams$HEEP2full,rmdParams$HEEP2fullAvail,rmdParams$HEEP2poolOb)
-getPairedD(nList, rse) # print out the d and kWh diff required for each n
+nList <- c(uniqueN(dailyMeanHeatPumpDT$linkID),
+           rmdParams$HEEP2full,
+           rmdParams$HEEP2fullAvail,
+           rmdParams$HEEP2poolOb) # how mahy in each sample?
 
+dt <- getPairedD(nList, rse) # print out the d and kWh diff required for each n using the rse calculated above
+kableExtra::kable(dt, caption = "For report Table 11", digits = 3) %>%
+  kable_styling()
+message("RSE from gg model: ", round(rse,3))
 
-nList <- seq(50,1000,50)
+# now create a generic plot
+nList <- seq(50,1000,50) # bigger range for plot
 pairedDT <- getPairedD(nList, rse) # print out the d and kWh diff required for each n
 
-pl <- ggplot2::ggplot(pairedDT, aes(x = V1, y = V3)) + 
+pl <- ggplot2::ggplot(pairedDT, aes(x = Sample, y = kWh_diff)) + 
   geom_line() +
   geom_point() +
   labs(x = "Sub-group sample size",
@@ -594,9 +694,11 @@ pl <- ggplot2::ggplot(pairedDT, aes(x = V1, y = V3)) +
 pl
 ggplot2::ggsave("kWhDiff_rangeHeatPumpsSubgroups.png", pl, 
                 width = 6, path = here::here("plots"))
+
+
 ```
 
-## Lighting
+#### Lighting
 
 ```{r lightingGG}
 # GG
@@ -619,20 +721,21 @@ dailyMeanLightingLinkedDT <- dailyMeanLightingLinkedDT[Q49_coded != "" &
                                                          !is.na(meankWh)]
 
 obsT <- make_p95Table(dailyMeanLightingLinkedDT[!is.na(Q49_coded)], groupVar = "Q49_coded")
+  
+kableExtra::kable(obsT[Threshold %like% "0.05"], digits = 3, caption = "for report Table 12") %>%
+  kable_styling()
 
 obsT[, kWh := meankWh]
 p <- make_CIplot(obsT, kwh = "meankWh", xVar = "Q49_coded", xLab = "Main lumen type")
 p <- p + coord_flip() 
+p
 ggplot2::ggsave(paste0("Q49_coded_CI.png"), p, 
                 width = 6, path = here::here("plots"))
-  
-kableExtra::kable(obsT, digits = 3) %>%
-  kable_styling()
 ```
 
-### Power calcs?
+No power calculations done.
 
-## Proportions
+### Proportions
 
 ```{r calcMoE}
 # > Confidence intervals ----
@@ -656,6 +759,7 @@ pwr.p.test(h = , n = rmdParams$HEEP2full, sig.level = 0.05, power = 0.8)
 ```
 
 Test n for different p and proportions within the single sample
+
 ```{r propMulti}
 # power.prop.test is easier to use
 # calculate n for each group - e.g. % heat pumps in renters vs owner-occupiers
@@ -768,6 +872,36 @@ dt[samples == rmdParams$HEEP2fullAvail]
 dt[samples == rmdParams$HEEP2poolOb]
 ```
 
-# The end
+# R environment
+
+To aid reproducibility:
+
+```{r env}
+R.version
+```
+
+Additional CRAN packages used:
+
+```{r cranPackages, results = "asis"}
+# this will print out the packages we loaded earlier and set up bibtex references
+# it requires a bib file to exist (see yaml) and the references to be in this format
+
+for(p in cranPackages){
+  cat(" * ", p, " [@",p,"]\n", sep = "")
+}
+```
+
+Other packages used:
+
+```{r githubPackages, results = "asis"}
+# this will print out the packages we loaded earlier and set up bibtex references
+# it requires a bib file to exist (see yaml) and the references to be in this format
+
+for(p in githubPackages){
+  cat(" * ", p, " [@",p,"]\n", sep = "")
+}
+```
+
+# References
 
 
