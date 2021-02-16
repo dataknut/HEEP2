@@ -1,0 +1,810 @@
+---
+title: "HEEP2: Scaling worked examples (WP2)"
+author: "Ben Anderson"
+date: "`r Sys.time()`"
+output: 
+  bookdown::html_document2:
+    fig_caption: yes
+    code_folding: hide
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: TRUE
+bibliography: '`r paste0(here::here(), "/refs.bib")`'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) # by default all code is reported
+
+# Packages ----
+
+# install from github if needed
+githubPackages <- c("GREENGridData", "dkUtils")
+#devtools::install_github("cfsOtago/GREENGridData")
+#devtools::install_github("dataknut/dkUtils")
+library(GREENGridData) # for useful functions
+library(dkUtils) # for useful functions
+
+# install from cran if needed
+cranPackages <- c("data.table", # for data munching
+                  "flextable", # tables
+               "ggplot2", # for plots
+               "here", # here or there?
+               "lubridate", # for dateTimes
+               "pwr", # pwr tests - can be easier to use than stats::
+               "hms", # hms
+               "kableExtra", # more tables
+               "readxl", # cos we have to
+               "survey" # survey stats
+               )
+
+GREENGridData::loadLibraries(cranPackages) # load (or install & load) the packages we need
+
+# Functions ----
+source(here::here("R", "functions.R"))
+
+# Paramaters ----
+rmdParams <- list()
+rmdParams$ggPath <- path.expand("~/data/NZ_GREENGrid/") # change this to suit your local context
+rmdParams$censusPath <- path.expand("~/data/NZ_Census/data/")
+rmdParams$mbiePath <- path.expand(here::here("data"))
+
+rmdParams$NZ_HHs_projected2015 <- 1721000 # 2015 
+# https://www.stats.govt.nz/information-releases/national-family-and-household-projections-2013base2038-update
+```
+
+# Executive Summary
+Skeleton ToC so heading numbers match full report
+
+# Introduction
+
+# Upscaling methods
+
+Code and results for this section. Full report at: 
+
+> NB This is a bare bones .Rmd file. Please see the report for full details.
+
+## Data
+
+### Green Grid
+Load the data - sourced from https://reshare.ukdataservice.ac.uk/853334/
+
+We use the GREEN Grid sample of ~ 40 New Zealand dwellings/households to give worked examples of the scaling methods described.
+
+```{r loadData}
+
+# half-hourly total household consumption (pre-prepared)
+totalF <- paste0(rmdParams$ggPath, "halfHourImputedTotalDemand_Fixed.csv.gz")
+
+# half-hourly lighting consumption
+lightingF <- paste0(rmdParams$ggPath, "halfHourLighting.csv.gz")
+
+# half-hourly heat pump consumption
+heatPumpF <- paste0(rmdParams$ggPath, "halfHourHeatPump.csv.gz")
+
+# household attribute data
+hhF <- paste0(rmdParams$ggPath, "ggHouseholdAttributesSafe_2019-04-09.csv.gz")
+
+# weights created using IPF in SPATIALEC
+hhWf <- paste0(rmdParams$ggPath, "ipf/nonZeroWeightsAu2013.csv")
+```
+
+Now prep and check the data:
+
+```{r dataPrep}
+# > power ----
+totalDT <- data.table::fread(totalF)
+setkey(totalDT, linkID)
+message("N households in total")
+uniqueN(totalDT$linkID)
+
+heatPumpDT <- data.table::fread(heatPumpF)
+message("N households with monitored heat pump circuits")
+uniqueN(heatPumpDT$linkID)
+setkey(heatPumpDT, linkID)
+
+lightingDT <- data.table::fread(lightingF)
+message("N households with monitored lighting circuits")
+uniqueN(lightingDT$linkID)
+setkey(lightingDT, linkID)
+
+powerDataPrep <- function(dt){
+  dt[, meanConsumptionkWh := (meanPowerW/2)/1000]
+  dt[, r_as_dateTime := lubridate::as_datetime(r_dateTimeHalfHour)]
+  dt[, r_dateTimeNZ := lubridate::with_tz(r_as_dateTime, "Pacific/Auckland")]
+  dt[, r_date := lubridate::as_date(r_dateTimeNZ)]
+  dt[, r_halfHour := hms::as_hms(r_dateTimeNZ)]
+  dt[, r_year := lubridate::year(r_dateTimeNZ)]
+  dt <- addNZSeason(dt, dateTime = "r_dateTimeNZ")
+  return(dt)
+}
+
+totalDT <- powerDataPrep(totalDT)
+heatPumpDT <- powerDataPrep(heatPumpDT)
+lightingDT <- powerDataPrep(lightingDT)
+```
+
+Now check the data and remove any [recommended for exclusion](https://cfsotago.github.io/GREENGridData/gridSpy1mOutliersReport_v1.0.html#45_the_mysterious_case_of_rf_46) on quality grounds (rf_46)
+
+```{r checkDataPeriods}
+
+# check
+#table(totalDT$circuit)
+t <- totalDT[, .(mean_kWh = mean(meanConsumptionkWh),
+                 nHouseholds = uniqueN(linkID),
+                 startDate = min(r_date),
+                 endDate = max(r_date)), keyby = .(r_year)]
+
+ft <- set_caption(flextable(t),
+            caption = "Data availability")
+flextable::autofit(ft)
+
+totalDT <- totalDT[r_year == 2015 & linkID != "rf_46"]
+heatPumpDT <- heatPumpDT[r_year == 2015 & linkID != "rf_46"]
+lightingDT <- lightingDT[r_year == 2015 & linkID != "rf_46"]
+```
+
+We have data for multiple years. For simplicity we will keep only the data for 2015 when we have the largest number of households (see Table \@ref(tab:checkDataPeriods)).
+
+Check that the time of day demand profiles look OK. Figure \@ref(fig:checkProfileAll) shows overall kWh profiles for all dwellings with electricity use monitoring.
+
+```{r checkProfileAll, fig.cap = "Overall kWh profile by season"}
+# check - beware which hemisphere we are in?
+table(totalDT$month, totalDT$season)
+
+testDT <- totalDT[, .(meankWh = mean(meanConsumptionkWh)), 
+                  keyby = .(r_halfHour, season, r_year)]
+
+ggplot2::ggplot(testDT, aes(x = r_halfHour, y = meankWh, colour = season)) + 
+  geom_line() +
+  labs(caption = "Whole household mean kWh per half hour") +
+  facet_grid(. ~ r_year)
+```
+
+Figure \@ref(fig:checkProfileLighting) shows lighting kWh profiles for all dwellings with electricity use monitoring.
+
+```{r checkProfileLighting, fig.cap = "Lighting profile by season"}
+testDT <- lightingDT[, .(meankWh = mean(meanConsumptionkWh)), 
+                  keyby = .(r_halfHour, season, r_year)]
+
+ggplot2::ggplot(testDT, aes(x = r_halfHour, y = meankWh, colour = season)) + 
+  geom_line() +
+  labs(caption = "Lighting mean kWh per half hour") +
+  facet_grid(. ~ r_year)
+```
+
+Both Figure \@ref(fig:checkProfile_all) and Figure \@ref(fig:checkProfileLighting) show the time of day profiles we would expect.
+
+Process and check household data
+
+```{r hhData}
+# > household ----
+hhDT <- data.table::fread(hhF)
+hhDT <- code_Q7(hhDT)
+hhDT[, hasPV := `PV Inverter`]
+hhDT[, hasPV := ifelse(hasPV == "", "No", hasPV)]
+hhDT[, hasSurvey := "Yes"]
+
+hhDT[, nPeople := nAdults + nChildren0_12 + nTeenagers13_18]
+hhDT[, nPeople_Factor := ifelse(nPeople > 1, "2", "1")]
+hhDT[, nPeople_Factor := ifelse(nPeople > 2, "3", nPeople_Factor)]
+hhDT[, nPeople_Factor := ifelse(nPeople > 3, "4+", nPeople_Factor)]
+
+# check
+message("Number of households in survey data")
+uniqueN(hhDT$linkID)
+
+setkey(hhDT, linkID)
+setkey(totalDT, linkID)
+
+dt <- totalDT[, .(nObs = .N), keyby = .(linkID)]
+dt[, hasElecMonitor := "Yes"]
+setkey(dt, linkID)
+hhDT <- merge(hhDT, dt, all = TRUE) # keep all the linkIDs
+t <- hhDT[, .(n = .N), keyby = .(hasSurvey, hasElecMonitor)]
+set_caption(flextable(t),caption = "Number of households with/without survey and monitoring data")
+```
+
+Note that not all households in the survey data have electricity monitoring data and vice versa.
+
+Now check for 0 and negative values in the dwelling overall total kWh.
+
+```{r checkZeros}
+# any zeros & negative numbers?
+#hist(totalDT$meanConsumptionkWh)
+ggplot2::ggplot(totalDT, aes(x = meanConsumptionkWh)) +
+  geom_histogram() +
+  labs(caption = "Mean half-hourly data")
+# some
+
+# check if aggregated to daily sum
+dailyAllDT <- totalDT[, .(sumkWh = sum(meanConsumptionkWh), # daily sum
+                          meankWh = mean(meanConsumptionkWh) # daily mean
+                          ), 
+                      keyby = .(r_date, linkID, season)]
+
+ggplot2::ggplot(dailyAllDT, aes(x = sumkWh)) +
+  geom_histogram() +
+  labs(caption = "Daily sum of half-hourly data")
+# still some neg - probably due to PV?
+
+# check if aggregated to household 
+dt <- dailyAllDT[, .(meankWh = mean(sumkWh),
+                     sdkWh = sd(sumkWh)), keyby = .(linkID)]
+ggplot2::ggplot(dt, aes(x = meankWh)) +
+  geom_histogram() +
+  labs(caption = "Mean of all half-hourly data per household")
+# still some
+```
+There are negative kWh values at all levels of aggregation.
+
+Check if the negative values are to do with PV.
+
+```{r checkPV, fig.cap = "Count of negative kWh values by time of day and whether reported presence of PV"}
+# need to check -ve = mid-day, if not is not PV must just be errors?
+totalDT[, testValues := "> 0"]
+totalDT[, testValues := ifelse(meanConsumptionkWh == 0, "0", testValues)]
+totalDT[, testValues := ifelse(meanConsumptionkWh < 0, "< 0", testValues)]
+testDT <- totalDT[hhDT[, .(linkID, hasPV)]]
+dt <- testDT[testValues == "< 0", .(nValues = .N),
+                  keyby = .(r_halfHour, season, linkID, testValues,hasPV)]
+
+p <- ggplot2::ggplot(dt[!is.na(testValues) & !is.na(season)], aes(x = r_halfHour, y = nValues, colour = linkID)) +
+  geom_line() +
+  facet_grid(season ~ testValues + hasPV) +
+  labs(x = "Half hour",
+       y = "N",
+       caption = paste0("All -ve values, Yes = PV reported in survey\n",
+                        "Colours = individual dwellings, legend omitted for clarity")
+  ) +
+  theme(legend.position="none")
+p
+
+library(plotly)
+plotly::ggplotly(p)
+```
+
+so:
+a) neg values indicate PV - although at least one household who reported having PV ("Yes") apparently did not (rf_23)
+b) low levels of negative values where PV is not reported ('No") may indicate monitoring device errors (rf_14 and rf_26)
+
+If we only care about network load we could keep all values > 0 only.
+If we want total energy input then we need grid draw + PV input which we might be able to calculate from the PV circuit W - grid export but it gets complicated.
+
+> So for now we'll leave out the dwellings which seem to have PV
+
+```{r createDailyData}
+setkey(dailyAllDT, linkID)
+dailyDT <- dailyAllDT[hhDT[hasPV == "No"]]
+```
+
+```{r loadIPFweights}
+
+ggIPF_AU_DT <- data.table::fread(hhWf)
+skimr::skim(ggIPF_AU_DT)
+
+```
+
+### MBIE Electricity statistics {#mbie}
+
+Source: https://www.mbie.govt.nz/building-and-energy/energy-and-natural-resources/energy-statistics-and-modelling/energy-statistics/electricity-statistics/
+
+```{r loadMBIE}
+mbieDF <- readxl::read_xlsx(paste0(rmdParams$mbiePath, "/MBIE_Electricity_extract_2015.xlsx"))
+mbieDT <- as.data.table(mbieDF)
+setnames(mbieDT, "...1", "Variable")
+set_caption(colformat_num(flextable(mbieDT), digits = 1),
+            caption = "MBIE data extract for 2015")
+
+
+resCons <- mbieDT[Variable %like% "Residential"]
+
+dt <- melt(resCons)
+
+annualResGWh <- sum(dt[Variable == "Residential  consumption (GWh)"]$value)
+rmdParams$NZ_nResICPs_MBIE_2015 <- mean(dt[Variable == "Residential Number of ICPs5"]$value)
+
+dailyResMeanTotalGWh <- annualResGWh/365
+dailyResMeanKWh <- 1000000*(dailyResMeanTotalGWh/rmdParams$NZ_nResICPs_MBIE_2015)
+```
+
+We use this data below to validate the upscaled results. The quarterly residential consumption figures are used directly and we also calculate:
+
+ * mean annual daily residential GWh:  `r round(dailyResMeanTotalGWh, 2)` GWh.
+ * mean daily kWh per ICP (household): `r round(dailyResMeanKWh, 2)` kWh
+
+### Census 2013
+
+This data comprises family, household or dwelling counts (depending on the variables of interest) at area unit level. The data was downloaded from the Stats NZ census table [download tool](http://nzdotstat.stats.govt.nz/wbos/index.aspx) and processed using [code](https://git.soton.ac.uk/ba1e12/spatialec/blob/master/dataProcessing/processCensusAu2013.Rmd) developed as part of the EU H2020 Marie Skłodowska-Curie scheme-funded [SPATIALEC](https://energy.soton.ac.uk/spatialec/) Global Fellowship hosted by the University of Otago.
+
+```{r loadCensus}
+
+f <- paste0(rmdParams$censusPath, "Number of usual residents in household, for households in occupied private dwellings, 2001, 2006, and 2013 Censuses (RC, TA, AU)/TABLECODE8169_Data_f4c79560-8c41-4ff9-b861-5598e6e0b50d.csv")
+censusDT <- data.table::fread(f)
+
+censusOccupancyDT <- censusDT[Area == "Total, New Zealand by regional council/area unit" &
+                `Number of usual residents in household` %like% "usual"]
+
+ft <- set_caption(flextable(censusOccupancyDT[Year == "2013", .(`Number of usual residents in household`, n = Value)]), caption = "Number of households by occupancy (2013)")
+autofit(ft)
+
+censusOccupancyDT[, nPeople := `Number of usual residents in household`]
+censusOccupancyDT[, nPeople_Factor := ifelse(nPeople %like% "One", "1", "4+")]
+censusOccupancyDT[, nPeople_Factor := ifelse(nPeople %like% "Two", "2", nPeople_Factor)]
+censusOccupancyDT[, nPeople_Factor := ifelse(nPeople %like% "Three", "3", nPeople_Factor)]
+#censusOccupancyDT[, .(n = sum(Value)), keyby = .(nPeople_Factor,nPeople)]
+
+rmdParams$NZ_nHHs_Census_2013 <- sum(censusOccupancyDT[Year == "2013"]$Value)
+```
+
+Table \@ref(tab:loadCensus) shows the number of households by household size. We will use this later.
+
+```{r loadCensusIPFinput}
+# might not need this
+f <- paste0(rmdParams$censusPath, "2013/2013IpfInput.csv")
+
+censusIPFInputAUDT <- data.table::fread(f)
+skimr::skim(censusIPFInputAUDT)
+
+f <- paste0(rmdParams$censusPath, "2013/censusAu2013IpfInput.csv")
+
+censusIPFInputAU_reducedDT <- data.table::fread(f)
+skimr::skim(censusIPFInputAU_reducedDT)
+```
+
+
+## Re-weighting
+
+### Multiplication of point estimates {#multi}
+
+In this example we simply multiply point estimates by the population size. In this case we:
+
+ * calculate mean daily kWh for 2015
+ * calculate mean daily kWh by quarter (with 95% confidence intervals) for 2015. We use quarter instead of season so that we can validate against MBIE quarterly data (see below);
+ * multiply both by the the [2015 NZ Statistics household count projection](http://archive.stats.govt.nz/browse_for_stats/population/estimates_and_projections/DwellingHouseholdEstimates_HOTPJun17qtr.aspx) of 1,796,000 households to give national estimates of daily residential electricity use.
+
+#### Daily
+
+Table \@ref(tab:daily) shows the mean daily kWh and the estimated 95% confidence intervals for this mean calculated from Green Grid sample. The table also shows the same result for a simulated HEEP2 full sample size of 280 to illustrate the effect of increasing sample size (only) on precision c.f [@anderson_ensuring_2020]. In this case we assume that the mean and s.d. are unchanged. As noted in WP1, there is no 'right' value for this sample size - it depends what level of (im)precision can be accommodated in the analytic results as will be made clear below.
+
+```{r daily}
+baseDT <- dailyDT[!is.na(sumkWh), .(mean = mean(sumkWh),
+                  sd = sd(sumkWh),
+                  nSample = uniqueN(linkID))]
+baseDT[, ci_lower := mean - (sd/sqrt(nSample))*qnorm(0.975)]
+baseDT[, ci_upper := mean + (sd/sqrt(nSample))*qnorm(0.975)]
+baseDT[, source := "GreenGrid"]
+
+baseDTHEEP2 <- copy(baseDT)
+# simulate HEEP2 full
+# really we should do a proper re-sampling etc but...
+baseDTHEEP2[, ci_lower := mean - (sd/sqrt(280))*qnorm(0.975)]
+baseDTHEEP2[, ci_upper := mean + (sd/sqrt(280))*qnorm(0.975)]
+baseDTHEEP2[, source := "Simulated HEEP2 sample size"]
+baseDTHEEP2[, nSample := 280]
+
+dt <- rbind(baseDT,baseDTHEEP2)
+dt[, ci_range := ci_upper - ci_lower]
+
+ft <- colformat_num(flextable(dt[, .(source, nSample, mean, sd,
+                                ci_lower, ci_upper, ci_range)]), digits = 2, na_str = "N/A")
+ft <- colformat_num(ft, j = "nSample", digits = 0, na_str = "N/A")
+set_caption(autofit(ft), 
+            caption = "Mean daily household kWh (2015)")
+
+# for text
+pcOverEstimate <- 100*((baseDT$mean/dailyResMeanKWh)-1) # % mean higher than MBIE mean
+ci_range <- baseDT$ci_upper - baseDT$ci_lower # CI range
+pcOfMean <- ci_range/baseDT$mean
+
+```
+
+As we can see the Green grid data produces a mean daily kWh value which is ~`r round(pcOverEstimate)`% higher than the MBIE derived figure of `r round(dailyResMeanKWh, 2)`. However we can also see that the MBIE value is included within the very large Green Grid 95% CI which range from `r round(baseDT$ci_lower,2)` to `r round(baseDT$ci_upper,2)` or `r round(ci_range)` kWh/day (~ `r round(100*pcOfMean)` % of the mean)!
+
+On the other hand, while the HEEP2 simulation shows the consequences of increasing sample size on precision (much narrower 95% confidence interval), the MBIE value now lies outside (below) the 95% lower confidence interval limit. We would therefore suspect that the Green grid sample may have higher than average consumption.
+
+Table \@ref(tab:dailyScaled) shows the result of scaling this daily mean by the estimated number of New Zealand households (`r tidyNum(rmdParams$NZ_HHs)`). The first row uses the original Green Grid mean and confidence intervals while the second row uses the simulated HEEP2 confidence intervals.
+
+```{r dailyScaled}
+
+dt[, GWh := (mean * rmdParams$NZ_HHs)/1000000]
+dt[, GWh_lower := (ci_lower * rmdParams$NZ_HHs)/1000000]
+dt[, GWh_upper := (ci_upper * rmdParams$NZ_HHs)/1000000]
+dt[, nNZHHs := rmdParams$NZ_HHs]
+dt <- dt[, GWh_CI := GWh_upper - GWh_lower]
+
+ft <- colformat_num(flextable(dt[, .(source, nSample,nNZHHs,
+                                GWh, GWh_lower, GWh_upper, 
+                                GWh_CI)]), digits = 2, na_str = "N/A")
+ft <- colformat_num(autofit(ft), j = c("nSample", "nNZHHs"),
+                    digits = 0, na_str = "N/A")
+
+set_caption(ft, 
+            caption = "Mean total daily household GWh (scaled, 2015)")
+```
+In both cases the mean daily residential GWh (`r round(dt$GWh[1],2)`) is considerably higher than the MBIE derived total of `r round(dailyResMeanTotalGWh,2)` GWh/day (see Section \@ref(mbie)) reconfirming our suspicion that the Green grid sample is biased towards higher usage households. This is likely to be due to the [preferential recruitment](https://cfsotago.github.io/GREENGridData/overviewReport_v1.0.html#4_study_recruitment) of larger households with electricity as a main energy source and heating via heat pumps for the Green Grid study [@anderson_gg_2018].
+
+As we would expect (second row in Table \@ref(tab:dailyScaled)), increasing the sample size to 280 increases precision. Nevertheless, the 95% CI of ~ 5 GWh/day is roughly equivalent to the New Zealand daily wind generation of 6.5 GWh in Q3 2015 (c.f. Table \@ref(tab:loadMBIE)), a level of imprecision that may still preclude use of the estimate for practical purposes. As noted above and as discussed in WP1 report at length, the level of precision required should dictate the sample size required.
+
+#### Daily by quarter
+
+To extend the example, we next estimate the same values but by quarter to compare with the MBIE data. Table \@ref(tab:dailyByQ) shows the mean daily kWh per household by season. NA values indicate the households for whom no electricity monitoring data exists.  The table also shows the lower and upper 95% confidence intervals calculated using the sample sd and n.
+
+For validation purposes we use the quarterly per ICP kWh consumption values for 2015 (see Table \@ref(tab:loadMBIE)):
+
+ * Q1 2015: 1,426
+ * Q2 2015: 1,829
+ * Q3 2015: 2,377
+ * Q4 2015: 1,670
+
+These have been converted to mean daily values for comparison purposes as shown in Table \@ref(tab:dailyByQ) and Figure \@ref(fig:dailyByQ). 
+
+Figure \@ref(fig:dailyByQ) shows the Green grid estimates (columns) together with their 95% confidence intervals (error bars) and the quarterly MBIE values (dots). We can see that the MBIE derived values are a close match to the Green Grid point estimates for Q1 and Q4 and lie in the centre of the Green Grid 95% confidence intervals. However the Green Grid data appears to over-estimate consumption in Q2 and Q3 which correspond to the New Zealand heating season. This is particularly noticeable for Q2 where the MBIE value is only just within the Green Grid 95% confidence interval. Once again, this reflects the Green grid sample bias towards family households with higher than average electricity demand in winter.
+
+```{r dailyByQ, fig.cap="Quarterly mean daily kWh"}
+dailyDT[, q := ifelse(r_date >= lubridate::as_date("2015-04-01"), "Q2", "Q1")]
+dailyDT[, q := ifelse(r_date >= lubridate::as_date("2015-07-01"), "Q3", q)]
+dailyDT[, q := ifelse(r_date >= lubridate::as_date("2015-10-01"), "Q4", q)]
+dailyDT[, r_month := lubridate::month(r_date)]
+#table(dailyDT$q, dailyDT$r_month)
+
+qDT <- dailyDT[, .(mean = mean(sumkWh),
+                  sd = sd(sumkWh),
+                  n = uniqueN(linkID)), keyby = q]
+
+qDT[, ci_lower := mean - (sd/sqrt(n))*qnorm(0.975)]
+qDT[, ci_upper := mean + (sd/sqrt(n))*qnorm(0.975)]
+
+# a quarter is ~ 90 days but...
+qDT[q == "Q1", mbie_kWh := 1426/as.double(difftime("2015-04-01","2015-01-01"))]
+qDT[q == "Q2", mbie_kWh := 1829/as.double(difftime("2015-07-01","2015-04-01"))]
+qDT[q == "Q3", mbie_kWh := 2377/as.double(difftime("2015-10-01","2015-07-01"))]
+qDT[q == "Q4", mbie_kWh := 1670/as.double(difftime("2015-12-31","2015-10-01"))]
+
+ft <- colformat_num(flextable(qDT), digits = 2, na_str = "N/A")
+ft <- colformat_num(ft, j = "n", digits = 0, na_str = "N/A")
+set_caption(ft, 
+            caption = "Mean daily household kWh by quarter (2015)")
+
+ggplot2::ggplot(qDT, aes(x = q, y = mean, fill = q)) +
+  geom_col() +
+  scale_fill_discrete(name = "Quarter") +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), colour = "grey50") +
+  geom_point(aes(y = mbie_kWh))
+```
+
+Table \@ref(tab:dailyByQScaled) shows the results of multiplying each of the point estimates (the mean) and the upper and lower confidence intervals by the population size (1,796,000) to estimate the total daily electricity consumption for all New Zealand households by quarter. As would be expected given Table \@ref(tab:dailyByQ), the uncertainty in the estimates is very large with the 95% confidence interval of ~19 GWh in Q3 roughly equivalent to the daily output of all New Zealand geothermal generation in Q3 2015 (~ 20 GWh/day - see MBIE data Table 1) or about 16% of total net generation. This level of uncertainty would mean that generalisation for policy purposes would be far from robust.
+
+```{r dailyByQScaled}
+
+qDT[, scaledSum := mean * rmdParams$NZ_HHs]
+qDT[, scaledCI_lo := ci_lower * rmdParams$NZ_HHs]
+qDT[, scaleduCI_hi := ci_upper * rmdParams$NZ_HHs]
+
+t <- qDT[, .(q, n, GWh = scaledSum/1000000, 
+                        GWh_lower = scaledCI_lo/1000000, 
+                        GWh_upper = scaleduCI_hi/1000000)]
+t <- t[, CI := GWh_upper - GWh_lower]
+
+ft <- flextable(t[!is.na(q), .(q, sampleN = n, popN = rmdParams$NZ_HHs, GWh, GWh_lower, GWh_upper, CI)])
+
+ft <- colformat_num(ft, digits = 2)
+ft <- colformat_num(ft, j = c("sampleN", "popN"), digits = 0, na_str = "N/A")
+
+set_caption(ft, 
+            caption = "Mean total daily household GWh by quarter (scaled, 2015)")
+```
+
+As before, we have re-calculated the 95% confidence intervals using n = 280 to simulate the potential precision for the HEEP2 full sample. Table \@ref(tab:basicScaledHEEP2) shows the results of doing so - the uncertainty in Q4 is now reduced to a 95% confidence interval of ~ 6 GWh, roughly equivalent to the daily wind generation of 7.5 GWh in Q4 2015. While the precision has improved, there is still substantial uncertainty illustrating the difficulty of making national level estimates from relatively small samples.
+
+```{r basicScaledHEEP2}
+
+qDT[, ci_lower_HEEP2 := mean - (sd/sqrt(280))*qnorm(0.975)]
+qDT[, ci_upper_HEEP2 := mean + (sd/sqrt(280))*qnorm(0.975)]
+
+qDT[, scaledSum := mean * rmdParams$NZ_HHs]
+qDT[, scaledlCI_lo := ci_lower_HEEP2 * rmdParams$NZ_HHs]
+qDT[, scaleduCI_hi := ci_upper_HEEP2 * rmdParams$NZ_HHs]
+
+t <- qDT[, .(q, GWh = scaledSum/1000000, 
+                        GWh_lower = scaledlCI_lo/1000000, 
+                        GWh_upper = scaleduCI_hi/1000000)]
+t <- t[, CI := GWh_upper - GWh_lower]
+
+ft <- flextable(t[!is.na(q), .(q, sampleN = 280, popN = rmdParams$NZ_HHs, 
+                               GWh, GWh_lower, GWh_upper, CI)])
+ft <- colformat_num(ft, digits = 2)
+ft <- colformat_num(ft, j = c("sampleN","popN"), digits = 0, na_str = "N/A")
+
+set_caption(ft, 
+            caption = "Simulated mean total daily household GWh by quarter (n = 280, scaled, 2015)")
+```
+
+
+### Proportional scaling
+
+In this example we adjust the daily kWh to account for the distribution of the number of dwelling occupants (1,2,3,4+). To do this we need to know the proportion of these households in both the Green Grid sample and the closest (2013) NZ census. Note that the total number of households in 2013 was 1,549,875 rather than the 2015 estimate of 1,796,000 as used above.
+
+Table \@ref(tab:compareOccs) shows the distribution of households of different sizes in the Green grid 2015 sample compared to the 2013 Census data. This table clearly shows that the Green grid sample under-represents single person households and over-represents 3-4+ person households. Given that larger households tend to use more electricity (see mean kWh column) adjusting for these over-representations may reduce the bias in the sample mean and thus in a scaled population estimate.
+
+```{r compareOccs}
+# GG data
+occDT <- dailyAllDT[hhDT][!is.na(nPeople_Factor) & 
+                   !is.na(season), .(nHHs_GG = uniqueN(linkID),
+                     meanDailykWh = mean(sumkWh),
+                     sd = sd(sumkWh)), keyby = .(nPeople = nPeople_Factor)]
+occDT[, pc_HHS_GG := 100*(nHHs_GG/sum(nHHs_GG))]
+
+# census data
+c_occDT <- censusOccupancyDT[Year == 2013, .(nHHs_census = sum(Value)), keyby = .(nPeople = nPeople_Factor)]
+c_occDT[, pc_HHS_census := 100*(nHHs_census/sum(nHHs_census))]
+
+setkey(occDT, nPeople)
+setkey(c_occDT, nPeople)
+
+occDT <- occDT[c_occDT]
+
+ft <- set_caption(flextable(occDT[,.(nPeople, nHHs_GG, pc_HHS_GG, meanDailykWh, nHHs_census, pc_HHS_census)]),
+            caption = "Mean daily kWh by household size and distribution of household sizes (Green Grid 2015, Census 2013)")
+ft <- colformat_num(ft, digits = 2)
+colformat_num(ft, j = c("nHHs_GG", "nHHs_census"), digits = 0, na_str = "N/A")
+```
+
+Table \@ref(tab:ggOccupants) shows the mean daily kWh by household size together with their 95% confidence intervals confidence intervals. We can see that these are extremely wide due to the small counts within each occupancy category. Indeed the 95% CI for the single person households spans 0... As above, we then simulate the 95% CI using the HEEP2 full sample size of 280 to show how the uncertainty would reduce with a larger sample size. 
+
+```{r ggOccupants}
+occDT[, ci_lower := meanDailykWh - (sd/sqrt(nHHs_GG))*qnorm(0.975)]
+occDT[, ci_upper := meanDailykWh + (sd/sqrt(nHHs_GG))*qnorm(0.975)]
+
+# distribute the HEEP2 280 according to census %
+occDT[, nHEEP2 := 280 * pc_HHS_census/100]
+
+occDT[, ci_lowerHEEP2 := meanDailykWh - (sd/sqrt(nHEEP2))*qnorm(0.975)]
+occDT[, ci_upperHEEP2 := meanDailykWh + (sd/sqrt(nHEEP2))*qnorm(0.975)]
+
+ft <- set_caption(flextable(occDT[, .(nPeople, nHHs_GG, meanDailykWh,
+                                      sd, ci_lower, ci_upper,
+                                      ci_lowerHEEP2, ci_upperHEEP2)]),
+            caption = "Mean daily kWh by household size (Green Grid, 2015)")
+
+ft <- colformat_num(ft, digits = 2)
+colformat_num(ft, j = c("nHHs_GG"), digits = 0, na_str = "N/A")
+```
+
+Repeating the multiplicative scaling process now requires us to multiple the mean daily values by the number of households in each occupancy category.
+
+```{r scalingByOccupancy}
+
+occDT[, dailyGWh := (nHHs_census * meanDailykWh)/1000000]
+occDT[, scaledggCI_lo := (ci_lower * nHHs_census)/1000000]
+occDT[, scaledggCI_hi := (ci_upper * nHHs_census)/1000000]
+occDT[, scaledHEEP2CI_lo := (ci_lowerHEEP2 * nHHs_census)/1000000]
+occDT[, scaledHEEP2CI_hi := (ci_upperHEEP2 * nHHs_census)/1000000]
+
+occDT[, pc := 100*(dailyGWh/sum(occDT$dailyGWh))]
+
+ft <- set_caption(flextable(occDT[, .(nPeople, nHHs_GG, nHHs_census, dailyGWh,
+                                      "% of total" = pc,
+                                      scaledggCI_lo, scaledggCI_hi,
+                                      nHHs_HEEP2_full = nHEEP2, scaledHEEP2CI_lo,scaledHEEP2CI_hi)]),
+            caption = "Scaled total daily GWh by household size (2013 Census)")
+ft <- colformat_num(ft, big.mark=",")
+
+colformat_num(ft, j = c("nHHs_GG", "nHHs_census", "nHHs_HEEP2_full"), digits = 0)
+
+```
+
+Aggregating the total GWh values across all household types after scaling in this way gives a mean daily residential GWh value of `r round(sum(occDT$dailyGWh),1)` GWh, compared to the `r round(dailyResMeanTotalGWh, 2)` GWh MBIE value. This is likely to be caused by the use of the Census 2013 household counts (total households = `r tidyNum(rmdParams$NZ_nHHs_Census_2013)`) which are ~ `r round(100*(1-(rmdParams$NZ_nHHs_Census_2013/rmdParams$NZ_HHs_projected2015)))`% lower than both the ICP counts in the 2015 MBIE data (`r tidyNum(rmdParams$NZ_nResICPs_MBIE_2015)`) and the projected 2015 household counts (`r tidyNum(rmdParams$NZ_HHs_projected2015)`) used in Section \@ref(multi).
+
+### Multi-variate re-weighting
+
+Weights created using IPF method and NZ Census 2013 area unit data as part of SPATIALEC project. Aggregate these to give 'grossing' weights for each Green Grid household. Then create a fractional weight so they sum to 1. Use weighted survey stats to produce estimates.
+
+```{r getWeights}
+
+ggIPF_DT <- ggIPF_AU_DT[, .(grossWeight = sum(ipfWeight)), keyby = .(linkID)]
+
+# now we need a fractional weight so sum to 1 across linkIDs
+ggIPF_DT[, fracWeight := grossWeight/sum(ggIPF_DT$grossWeight)]
+
+# link them
+surveyData_DT <- ggIPF_DT[hhDT]
+
+# % sum error
+
+pcError <- 100*(1-sum(ggIPF_DT$grossWeight)/rmdParams$NZ_nHHs_Census_2013)
+```
+
+The grossing weights should sum to a close estimate of the number of Census households: 
+
+ * sum of grossing weights: `r sum(ggIPF_DT$fracWeight)`
+ * N Census 2013 households: `r rmdParams$NZ_nHHs_Census_2013`
+
+Difference: `r rmdParams$NZ_nHHs_Census_2013 - sum(ggIPF_DT$grossWeight)` or `r round(pcError, 2)`%
+
+With such a small sample we will have a number of dwellings with identical weights. We will also have a few households with large weights.
+
+```{r checkWeights}
+summary(surveyData_DT$fracWeight)
+
+dt <- ggIPF_DT[, .(n = .N), keyby = .(fracWeight = round(fracWeight,4), grossWeight = round(grossWeight, 4))]
+ft <- flextable(dt)
+set_caption(ft, caption = "Number of Green Grid households by fractional weight")
+sum(dt$fracWeight*dt$n)
+sum(dt$grossWeight*dt$n)
+sum(dt$n)
+
+# let's plot the fractional weights just to illustrate the problem
+ggplot2::ggplot(ggIPF_DT, aes(x = fracWeight)) +
+  geom_histogram()
+```
+
+> why do we get se = 0 for 1 person households? check weights :-)
+
+```{r setWeights}
+setkey(dailyDT, linkID)
+setkey(ggIPF_DT, linkID)
+
+dailyWtDT <- dailyDT[ggIPF_DT] # will drop the ones with no weight
+
+dailyWtDT <- dailyWtDT[!is.na(sumkWh) & !is.na(grossWeight)]
+
+svy_dailyFracWt <- survey::svydesign(id = ~linkID, weights = ~fracWeight,
+                           data = dailyWtDT)
+```
+
+```{r useFracWeights}
+# Fractional weights
+sm <- svymean(~sumkWh, svy_dailyFracWt)
+sm
+confint(sm)
+
+smNP <- svyby(~sumkWh, by = ~nPeople_Factor, svy_dailyFracWt, svymean, vartype=c("se","ci"))
+smNP
+# why do we get se = 0 for 1 person households? check weights :-)
+ft <- flextable(smNP)
+
+set_caption(colformat_num(ft, digits = 2),
+            caption = "Mean daily kWh by size of household")
+
+smNP_DT <- as.data.table(smNP)
+smNP_DT[, nPeople := nPeople_Factor]
+setkey(smNP_DT, nPeople)
+smNP_DT <- smNP_DT[c_occDT]
+smNP_DT[, meanDailyGWh := (sumkWh * nHHs_census)/1000000]
+smNP_DT[, ci_lower_GWh := (ci_l *nHHs_census)/1000000]
+smNP_DT[, ci_upper_GWh := (ci_u *nHHs_census)/1000000]
+
+sum(smNP_DT$meanDailyGWh)
+ft <- flextable(smNP_DT[,.(nPeople_Factor, meanDailyGWh,
+                                    ci_lower_GWh, ci_upper_GWh)])
+set_caption(colformat_num(ft, digits = 2),
+            caption = "Mean daily GWh by size of household")
+```
+
+Try the gross weight - the mean shold be the same.
+
+```{r useGrossWeights}
+
+svy_dailyGrossWt <- survey::svydesign(id = ~linkID, weights = ~grossWeight,
+                           data = dailyWtDT)
+
+sm_gw <- svymean(~sumkWh, svy_dailyGrossWt)
+confint(sm_gw)
+
+message("Can we use svytotal? Only if there are no missing days")
+nDays <- dailyDT[, .(nDays = .N), keyby = linkID]
+summary(nDays$nDays)
+message("There are missing days if the mean is not 365")
+
+```
+
+## Model-based estimates
+
+Develop a simple daily kWh model
+
+```{r dailykWhModel}
+hist(dailyDT$sumkWh)
+# skewed (of course)
+dailyWinterAggDT <- dailyDT[q == "Q2" | q == "Q3", .(meanDailykWh = mean(sumkWh, na.rm = TRUE)), keyby = linkID]
+hist(dailyWinterAggDT$meanDailykWh)
+# still skewed (of course)
+
+# test with a qq plot
+dailyWinterAggDT[, logkWh := log(meanDailykWh)]
+qqnorm(dailyWinterAggDT$logkWh); qqline(dailyWinterAggDT$logkWh, col = 2)
+shapiro.test(dailyWinterAggDT$logkWh)
+# if p > 0.05 => normal 
+# is it? Beware: shapiro-wilks is less robust as N -> 
+
+setkey(dailyWinterAggDT,linkID)
+modelDT <- dailyWinterAggDT[hhDT[, .(linkID, nPeople_Factor, Q7labAgg, Location, Q20_coded)]]
+skimr::skim(modelDT)
+
+modelDT[, hasElecHeat := ifelse(Q20_coded == "Heat pump" | 
+                                  Q20_coded == "HRV or other ventilation system" |
+                                  Q20_coded == "Portable electric heaters", "Yes", "No")]
+
+m <- lm(logkWh ~ Location  + Q7labAgg +
+           hasElecHeat + nPeople_Factor, data = modelDT)
+
+summary(m)
+
+set_caption(colformat_num(flextable(broom::tidy(m)), digits = 3),
+            caption = "Model predicting log(mean daily kWh) 2015")
+```
+
+Not a great model: -ve adjusted r sq is a strong indicator of this
+
+Test the model - diagnostics
+
+```{r modelDiagnostics}
+message("# Diagnostic plots")
+plot(m)
+message("# Normality of residuals")
+hist(m$residuals)
+qqnorm(m$residuals); qqline(m$residuals, col = 2)
+shapiro.test(m$residuals)
+
+library(car)
+message("# autocorrelation/independence of errors")
+car::durbinWatsonTest(m)
+# if p < 0.05 then a problem as implies autocorrelation
+message("# homoskedasticity: formal test")
+car::ncvTest(m)
+# if p > 0.05 then there is heteroskedasticity
+
+message("# -> collinearity")
+car::vif(m)
+# if any values > 10 -> problem
+message("# -> tolerance")
+1/car::vif(m)
+# if any values < 0.2 -> possible problem
+# if any values < 0.1 -> definitely a problem
+
+#save the residuals via broom
+library(broom)
+resids <- broom::augment(m)
+# plot fitted vs residuals
+ggplot(resids, aes(x = .fitted, y = .std.resid)) + 
+    geom_point(size = 1)
+
+message("Where there any NAs where the model failed?")
+summary(resids$.std.resid)
+```
+
+Overall, not a very good model. But it serves the purpose...
+
+# R environment
+
+To aid reproducibility:
+
+```{r env}
+R.version
+```
+
+Additional CRAN packages used:
+
+```{r cranPackages, results = "asis"}
+# this will print out the packages we loaded earlier and set up bibtex references
+# it requires a bib file to exist (see yaml) and the references to be in this format
+
+for(p in cranPackages){
+  cat(" * ", p, " [@",p,"]\n", sep = "")
+}
+```
+
+Other packages used:
+
+```{r githubPackages, results = "asis"}
+# this will print out the packages we loaded earlier and set up bibtex references
+# it requires a bib file to exist (see yaml) and the references to be in this format
+
+for(p in githubPackages){
+  cat(" * ", p, " [@",p,"]\n", sep = "")
+}
+```
+
+# References
+
+
