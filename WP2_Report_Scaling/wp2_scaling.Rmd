@@ -45,8 +45,8 @@ source(here::here("R", "functions.R"))
 
 # Paramaters ----
 rmdParams <- list()
-rmdParams$ggPath <- path.expand("~/data/NZ_GREENGrid/") # change this to suit your local context
-rmdParams$censusPath <- path.expand("~/data/NZ_Census/data/")
+rmdParams$ggPath <- path.expand("~/Dropbox/data/NZ_GREENGrid/") # change this to suit your local context
+rmdParams$censusPath <- path.expand("~/Dropbox/data/NZ_Census/data/")
 rmdParams$mbiePath <- path.expand(here::here("data"))
 
 rmdParams$NZ_HHs_projected2015 <- 1721000 # 2015 
@@ -86,7 +86,7 @@ heatPumpF <- paste0(rmdParams$ggPath, "halfHourHeatPump.csv.gz")
 hhF <- paste0(rmdParams$ggPath, "ggHouseholdAttributesSafe_2019-04-09.csv.gz")
 
 # weights created using IPF in SPATIALEC
-hhWf <- paste0(rmdParams$ggPath, "ipf/nonZeroWeightsAu2013.csv")
+hhWf <- paste0(rmdParams$ggPath, "ipf/nonZeroWeightsAu2013.csv.gz")
 ```
 
 Now prep and check the data:
@@ -293,7 +293,7 @@ Source: https://www.mbie.govt.nz/building-and-energy/energy-and-natural-resource
 mbieDF <- readxl::read_xlsx(paste0(rmdParams$mbiePath, "/MBIE_Electricity_extract_2015.xlsx"))
 mbieDT <- as.data.table(mbieDF)
 setnames(mbieDT, "...1", "Variable")
-set_caption(colformat_num(flextable(mbieDT), digits = 1),
+set_caption(colformat_num(flextable(mbieDT), digits = 2),
             caption = "MBIE data extract for 2015")
 
 
@@ -306,6 +306,8 @@ rmdParams$NZ_nResICPs_MBIE_2015 <- mean(dt[Variable == "Residential Number of IC
 
 dailyResMeanTotalGWh <- annualResGWh/365
 dailyResMeanKWh <- 1000000*(dailyResMeanTotalGWh/rmdParams$NZ_nResICPs_MBIE_2015)
+
+# NB: Mean daily kWh per ICP = average q total/90 (days)
 ```
 
 We use this data below to validate the upscaled results. The quarterly residential consumption figures are used directly and we also calculate:
@@ -319,7 +321,7 @@ This data comprises family, household or dwelling counts (depending on the varia
 
 ```{r loadCensus}
 
-f <- paste0(rmdParams$censusPath, "Number of usual residents in household, for households in occupied private dwellings, 2001, 2006, and 2013 Censuses (RC, TA, AU)/TABLECODE8169_Data_f4c79560-8c41-4ff9-b861-5598e6e0b50d.csv")
+f <- paste0(rmdParams$censusPath, "nResidents/TABLECODE8169_Data_f4c79560-8c41-4ff9-b861-5598e6e0b50d.csv")
 censusDT <- data.table::fread(f)
 
 censusOccupancyDT <- censusDT[Area == "Total, New Zealand by regional council/area unit" &
@@ -682,7 +684,7 @@ set_caption(colformat_num(ft, digits = 2),
             caption = "Mean daily GWh by size of household")
 ```
 
-Try the gross weight - the mean shold be the same.
+Try the gross weight - the mean should be the same.
 
 ```{r useGrossWeights}
 
@@ -698,6 +700,30 @@ summary(nDays$nDays)
 message("There are missing days if the mean is not 365")
 
 ```
+
+Identify key attributes of the 'groups' with very large weights.
+
+```{r inspectHH}
+temp_wdt <- ggIPF_DT[hhDT]
+
+temp_wdt[, gWtFactor := as.factor(round(grossWeight, 0))]
+
+t <- with(temp_wdt, table(gWtFactor, nPeople))
+kableExtra::kable(t, caption = "N people by grossWeight") %>% kable_styling()
+
+t <- with(temp_wdt, table(gWtFactor, nAdults))
+kableExtra::kable(t, caption = "N adults by grossWeight") %>% kable_styling()
+
+t <- with(temp_wdt, table(gWtFactor, hasPV, useNA = "always"))
+kableExtra::kable(t, caption = "N have PV by grossWeight") %>% kable_styling()
+
+t <- with(temp_wdt, table(gWtFactor, `Heat pump number`, useNA = "always"))
+kableExtra::kable(t, caption = "N heat pumps by grossWeight") %>% kable_styling()
+
+t <- with(temp_wdt, table(gWtFactor, Q7labAgg, useNA = "always"))
+kableExtra::kable(t, caption = "Age of dwelling by grossWeight") %>% kable_styling()
+```
+
 
 ## Model-based estimates
 
